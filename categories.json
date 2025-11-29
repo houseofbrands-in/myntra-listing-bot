@@ -1,22 +1,36 @@
 {
   "Women - Dresses": {
-    "system_prompt": "You are a Myntra Expert for Women's Fashion.",
+    "system_prompt": "You are a Myntra Cataloging Expert. User inputs (Hints): Color and Fabric. CRITICAL: 1. If User says 'Crepe', map Fabric='Polyester' and Fabric Type='Crepe'. 2. If User says 'Black and Multi', choose 'Multi'. 3. Write rich, premium descriptions.",
     "valid_options": {
-      "Neck": ["Round Neck", "V-Neck", "Square Neck", "Boat Neck"],
-      "Sleeve Length": ["Long Sleeves", "Short Sleeves", "Sleeveless"],
-      "Fabric": ["Cotton", "Polyester", "Viscose", "Silk"],
-      "Pattern": ["Solid", "Printed", "Striped", "Checked"]
+      "AgeGroup": ["Adults-Men", "Adults-Women", "Kids-Boys", "Kids-Girls"],
+      "Prominent Colour": ["Red", "Blue", "Green", "Black", "White", "Pink", "Grey", "Yellow", "Orange", "Navy Blue", "Maroon", "Cream", "Silver", "Gold", "Tan", "Beige", "Peach", "Multi", "Olive", "Khaki", "Charcoal", "Turquoise", "Lavender", "Magenta", "Teal", "Rust", "Mustard", "Coral", "Rose", "Champagne", "Violet"],
+      "Fabric": ["Cotton", "Polyester", "Viscose Rayon", "Silk", "Linen", "Wool", "Georgette", "Chiffon", "Crepe", "Denim", "Nylon", "Satin", "Lycra", "Blended"],
+      "Occasion": ["Casual", "Formal", "Party", "Maternity", "Sports"],
+      "Shape": ["Wrap", "Shirt", "Fit and Flare", "A-Line", "Shift", "Bodycon", "T-shirt", "Kaftan", "Maxi", "Peplum", "Sheath", "Empire", "Gown", "Blazer Dresses"],
+      "Neck": ["V-Neck", "Round Neck", "Boat Neck", "Halter Neck", "Off-Shoulder", "Square Neck", "Shirt Collar", "Mandarin Collar", "Scoop Neck", "Sweetheart Neck", "Keyhole Neck", "Hood", "Polo Collar", "High Neck"],
+      "Pattern": ["Checked", "Solid", "Striped", "Printed", "Embroidered", "Self Design", "Embellished", "Colourblocked", "Dyed"],
+      "Length": ["Mini", "Above Knee", "Knee Length", "Maxi", "Midi"],
+      "Sleeve Length": ["Long Sleeves", "Short Sleeves", "Sleeveless", "Three-Quarter Sleeves"],
+      "Hemline": ["Asymmetric", "Curved", "Flared", "Straight", "High-Low", "Tulip"],
+      "Print or Pattern Type": ["Abstract", "Floral", "Geometric", "Graphic", "Polka Dots", "Striped", "Solid", "Ethnic Motifs", "Checked", "Tie and Dye", "Self Design", "Camouflage", "Ombre", "Paisley"],
+      "Sleeve Styling": ["Regular Sleeves", "Puff Sleeves", "Bell Sleeves", "Flutter Sleeves", "Cold-Shoulder Sleeves", "Cuffed Sleeves", "Kimono Sleeves", "No Sleeves"],
+      "Transparency": ["Semi Sheer", "Sheer", "Opaque"],
+      "Fabric Type": ["Chiffon", "Georgette", "Denim", "Net", "Lace", "Crepe", "Satin", "Cotton", "Linen", "Knitted", "Velvet"],
+      "Closure": ["Zip", "Concealed Zip", "Button", "Hook and Eye", "NA"]
     },
-    "headers": ["styleId", "vendorSkuCode", "brand", "Neck", "Sleeve Length", "Fabric", "Pattern", "product_description"]
-  },
-  "Men - Casual Shirts": {
-    "system_prompt": "You are a Myntra Expert for Men's Apparel.",
-    "valid_options": {
-      "Collar": ["Spread Collar", "Mandarin Collar", "Button-Down Collar", "Cutaway Collar"],
-      "Sleeve Length": ["Long Sleeves", "Short Sleeves"],
-      "Fit": ["Regular Fit", "Slim Fit", "Boxy Fit"],
-      "Pattern": ["Checkered", "Solid", "Striped", "Printed"]
-    },
-    "headers": ["styleId", "vendorSkuCode", "brand", "Collar", "Sleeve Length", "Fit", "Pattern", "product_description"]
+    "headers": [
+      "styleId", "styleGroupId", "vendorSkuCode", "vendorArticleNumber", "vendorArticleName",
+      "brand", "Manufacturer Name and Address with Pincode", "Packer Name and Address with Pincode",
+      "Importer Name and Address with Pincode", "Country Of Origin", "articleType", 
+      "Brand Size", "Standard Size", "is Standard Size present on Label", "Brand Colour (Remarks)",
+      "HSN", "SKUCode", "MRP", "AgeGroup", "Prominent Colour", "FashionType", "Usage", "Year", "season", "Product Details",
+      "styleNote", "materialCareDescription", "sizeAndFitDescription", "productDisplayName",
+      "tags", "Fabric", "Occasion", "Shape", "Neck",
+      "Pattern", "Length", "Sleeve Length", "Knit or Woven", "Hemline",
+      "Print or Pattern Type", "Sleeve Styling",
+      "Transparency", "Fabric Type", "Care for me", "Closure",
+      "Net Quantity", "Net Quantity Unit", "Where-to-wear", "Style Tip",
+      "Front Image", "Back Image", "Side Image", "Bust ( Inches )", "Waist ( Inches )", "Hips ( Inches )", "Front Length ( Inches )"
+    ]
   }
 }
