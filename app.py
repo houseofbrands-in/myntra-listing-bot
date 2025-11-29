@@ -9,10 +9,10 @@ import time
 # ================= SETUP =================
 st.set_page_config(page_title="Myntra Listing Bot", layout="wide")
 
-st.title("🛍️ Automated Myntra Listing Engine")
-st.markdown("Upload your Excel, pick a category, and let AI write the catalog.")
+st.title("🛍️ Automated Myntra Listing Engine (Debug Mode)")
+st.markdown("Upload your Excel. If it fails, check the 'Status Log' below.")
 
-# 1. API KEY INPUT (Secure)
+# 1. API KEY INPUT
 api_key = st.text_input("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", type="password")
 
 # 2. LOAD CATEGORY RULES
@@ -20,42 +20,43 @@ try:
     with open('categories.json', 'r') as f:
         CATEGORY_RULES = json.load(f)
 except FileNotFoundError:
-    st.error("⚠️ 'categories.json' file not found!")
+    st.error("⚠️ 'categories.json' file not found! Please upload it to GitHub.")
     st.stop()
 
 # 3. SELECT CATEGORY
 selected_category = st.selectbox("Select Category", list(CATEGORY_RULES.keys()))
 current_rules = CATEGORY_RULES[selected_category]
 
-# Display valid options for the user to see
+# Display valid options
 with st.expander(f"View Rules for {selected_category}"):
     st.json(current_rules['valid_options'])
 
 # ================= HELPER FUNCTIONS =================
 def encode_image_from_url(url):
     try:
-        if pd.isna(url) or str(url).strip() == "": return None
+        if pd.isna(url) or str(url).strip() == "": 
+            return None, "Empty URL"
+        
+        # Dropbox fix
         if "dropbox.com" in url:
             url = url.replace("?dl=0", "").replace("&dl=0", "") + ("&dl=1" if "?" in url else "?dl=1")
+            
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            return base64.b64encode(response.content).decode('utf-8')
-    except:
-        return None
-    return None
+            return base64.b64encode(response.content).decode('utf-8'), None
+        else:
+            return None, f"Download Error (Status: {response.status_code})"
+    except Exception as e:
+        return None, f"Download Exception: {str(e)}"
 
 def analyze_image(client, image_url, user_inputs, rules):
-    base64_image = encode_image_from_url(image_url)
-    if not base64_image: return None
+    base64_image, error = encode_image_from_url(image_url)
+    if error: return None, error
 
-    # Dynamic Prompt based on selected category
     valid_opts_str = json.dumps(rules['valid_options'], indent=2)
     
     prompt = f"""
-    You are a Catalog AI. 
-    Category: {selected_category}
-    User Hints: {user_inputs}
-    
+    You are a Catalog AI. Category: {selected_category}. User Hints: {user_inputs}
     Task: Analyze the image and fill the attributes.
     STRICT RULE: You must choose values ONLY from this list:
     {valid_opts_str}
@@ -81,75 +82,94 @@ def analyze_image(client, image_url, user_inputs, rules):
             response_format={"type": "json_object"},
             max_tokens=1000
         )
-        return json.loads(response.choices[0].message.content)
+        return json.loads(response.choices[0].message.content), None
     except Exception as e:
-        return None
+        return None, f"OpenAI API Error: {str(e)}"
 
 # ================= MAIN APP LOGIC =================
 uploaded_file = st.file_uploader("Upload Input Excel", type=["xlsx"])
 
 if uploaded_file and api_key:
     if st.button("🚀 Start Generation"):
-        client = OpenAI(api_key=api_key)
-        df = pd.read_excel(uploaded_file)
-        
-        # Progress Bar
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        final_rows = []
-        image_cache = {}
-        
-        total = len(df)
-        
-        for index, row in df.iterrows():
-            # Update UI
-            status_text.text(f"Processing Row {index + 1}/{total} - SKU: {row.get('vendorSkuCode', 'Unknown')}")
-            progress_bar.progress((index + 1) / total)
+        try:
+            client = OpenAI(api_key=api_key)
+            df = pd.read_excel(uploaded_file)
             
-            img_link = str(row.get('Front Image', '')).strip()
+            # CHECK COLUMN NAMES
+            st.write("### Debug Info:")
+            st.write(f"Columns found in Excel: {list(df.columns)}")
             
-            # --- CACHE LOGIC ---
-            if img_link in image_cache:
-                ai_data = image_cache[img_link]
-            else:
-                # Gather hints from user columns
-                hints = f"Color: {row.get('Brand Colour', '')}, Fabric: {row.get('Fabric', '')}"
-                ai_data = analyze_image(client, img_link, hints, current_rules)
-                if ai_data: image_cache[img_link] = ai_data
+            if "Front Image" not in df.columns:
+                st.error("❌ Error: Column 'Front Image' not found! Please rename your image link column to 'Front Image'.")
+                st.stop()
             
-            if not ai_data: continue
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            final_rows = []
+            image_cache = {}
+            total = len(df)
+            
+            for index, row in df.iterrows():
+                sku = row.get('vendorSkuCode', f'Row {index+1}')
+                status_text.text(f"Processing: {sku}")
+                progress_bar.progress((index + 1) / total)
+                
+                img_link = str(row.get('Front Image', '')).strip()
+                error_msg = ""
+                ai_data = None
 
-            # --- MAPPING ---
-            # Start with empty row based on the Category's headers
-            new_row = {col: "" for col in current_rules['headers']}
+                # --- CACHE LOGIC ---
+                if img_link in image_cache:
+                    ai_data = image_cache[img_link]
+                else:
+                    hints = f"Color: {row.get('Brand Colour', '')}, Fabric: {row.get('Fabric', '')}"
+                    ai_data, error_msg = analyze_image(client, img_link, hints, current_rules)
+                    if ai_data: 
+                        image_cache[img_link] = ai_data
+                
+                # --- MAPPING ---
+                # Prepare row with defaults
+                new_row = {col: "" for col in current_rules['headers']}
+                
+                # Fill Input Data
+                for col in df.columns:
+                    if col in new_row:
+                        new_row[col] = row[col]
+                
+                # Fill AI Data or Error
+                if ai_data:
+                    for key, value in ai_data.items():
+                        if key in new_row:
+                            new_row[key] = value
+                    new_row['Status'] = "Success"
+                else:
+                    new_row['Status'] = f"Failed: {error_msg}"
+                
+                final_rows.append(new_row)
+                
+            # --- FINISH ---
+            output_df = pd.DataFrame(final_rows)
             
-            # Fill Standard Data from Input
-            for col in df.columns:
-                if col in new_row:
-                    new_row[col] = row[col]
+            st.success("✅ Processing Complete!")
             
-            # Fill AI Data
-            for key, value in ai_data.items():
-                if key in new_row:
-                    new_row[key] = value
+            # Show preview of failures if any
+            failed_rows = output_df[output_df['Status'].str.contains("Failed")]
+            if not failed_rows.empty:
+                st.warning(f"⚠️ {len(failed_rows)} rows failed. Check the 'Status' column in the download.")
+                st.dataframe(failed_rows[['vendorSkuCode', 'Status']])
+
+            # Download
+            excel_file = f"Myntra_Result_{int(time.time())}.xlsx"
+            output_df.to_excel(excel_file, index=False)
             
-            final_rows.append(new_row)
-            
-        # --- FINISH ---
-        output_df = pd.DataFrame(final_rows)
-        
-        st.success("✅ Processing Complete!")
-        
-        # Create Download Button
-        csv = output_df.to_csv(index=False).encode('utf-8')
-        excel_file = f"Myntra_{selected_category}_{int(time.time())}.xlsx"
-        output_df.to_excel(excel_file, index=False)
-        
-        with open(excel_file, "rb") as f:
-            st.download_button(
-                label="📥 Download Excel Result",
-                data=f,
-                file_name=excel_file,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            with open(excel_file, "rb") as f:
+                st.download_button(
+                    label="📥 Download Result (With Error Logs)",
+                    data=f,
+                    file_name=excel_file,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
+        except Exception as e:
+            st.error(f"Critical Error: {str(e)}")
