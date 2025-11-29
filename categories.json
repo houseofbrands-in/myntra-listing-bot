@@ -1,0 +1,22 @@
+{
+  "Women - Dresses": {
+    "system_prompt": "You are a Myntra Expert for Women's Fashion.",
+    "valid_options": {
+      "Neck": ["Round Neck", "V-Neck", "Square Neck", "Boat Neck"],
+      "Sleeve Length": ["Long Sleeves", "Short Sleeves", "Sleeveless"],
+      "Fabric": ["Cotton", "Polyester", "Viscose", "Silk"],
+      "Pattern": ["Solid", "Printed", "Striped", "Checked"]
+    },
+    "headers": ["styleId", "vendorSkuCode", "brand", "Neck", "Sleeve Length", "Fabric", "Pattern", "product_description"]
+  },
+  "Men - Casual Shirts": {
+    "system_prompt": "You are a Myntra Expert for Men's Apparel.",
+    "valid_options": {
+      "Collar": ["Spread Collar", "Mandarin Collar", "Button-Down Collar", "Cutaway Collar"],
+      "Sleeve Length": ["Long Sleeves", "Short Sleeves"],
+      "Fit": ["Regular Fit", "Slim Fit", "Boxy Fit"],
+      "Pattern": ["Checkered", "Solid", "Striped", "Printed"]
+    },
+    "headers": ["styleId", "vendorSkuCode", "brand", "Collar", "Sleeve Length", "Fit", "Pattern", "product_description"]
+  }
+}
