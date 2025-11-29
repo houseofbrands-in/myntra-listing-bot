@@ -9,11 +9,11 @@ import time
 # ================= SETUP =================
 st.set_page_config(page_title="Myntra Listing Bot", layout="wide")
 
-st.title("🛍️ Automated Myntra Listing Engine (Debug Mode)")
-st.markdown("Upload your Excel. If it fails, check the 'Status Log' below.")
+st.title("🛍️ Automated Myntra Listing Engine (V3 - Full Data)")
+st.markdown("Upload your Excel. This version forces AI to fill descriptions.")
 
 # 1. API KEY INPUT
-api_key = st.text_input("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", type="password")
+api_key = st.text_input("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", type="password")
 
 # 2. LOAD CATEGORY RULES
 try:
@@ -53,34 +53,34 @@ def analyze_image(client, image_url, user_inputs, rules):
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
+    # === CRITICAL CHANGE HERE ===
+    # We now combine the System Prompt from JSON with the Valid Options
     valid_opts_str = json.dumps(rules['valid_options'], indent=2)
-    
-    prompt = f"""
-    You are a Catalog AI. Category: {selected_category}. User Hints: {user_inputs}
-    Task: Analyze the image and fill the attributes.
-    STRICT RULE: You must choose values ONLY from this list:
-    {valid_opts_str}
-    
-    Also generate:
-    - vendorArticleName (Catchy title)
-    - product_description (100 words marketing copy)
-    - productDetails (Bullet points)
+    system_instruction = rules.get('system_prompt', "You are a Myntra Expert.")
 
-    Return ONLY raw JSON.
+    prompt = f"""
+    {system_instruction}
+
+    USER INPUTS FROM EXCEL: {user_inputs}
+
+    STRICT VALID OPTIONS (Use these lists for attributes):
+    {valid_opts_str}
+
+    RETURN ONLY RAW JSON.
     """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a JSON-only assistant."},
+                {"role": "system", "content": "You are a JSON-only assistant. You MUST fill every field requested."},
                 {"role": "user", "content": [
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
                 ]}
             ],
             response_format={"type": "json_object"},
-            max_tokens=1000
+            max_tokens=1500 # Increased to ensure descriptions aren't cut off
         )
         return json.loads(response.choices[0].message.content), None
     except Exception as e:
@@ -96,11 +96,8 @@ if uploaded_file and api_key:
             df = pd.read_excel(uploaded_file)
             
             # CHECK COLUMN NAMES
-            st.write("### Debug Info:")
-            st.write(f"Columns found in Excel: {list(df.columns)}")
-            
             if "Front Image" not in df.columns:
-                st.error("❌ Error: Column 'Front Image' not found! Please rename your image link column to 'Front Image'.")
+                st.error("❌ Error: Column 'Front Image' not found!")
                 st.stop()
             
             progress_bar = st.progress(0)
@@ -140,6 +137,7 @@ if uploaded_file and api_key:
                 # Fill AI Data or Error
                 if ai_data:
                     for key, value in ai_data.items():
+                        # We use loose matching to ensure keys match even if AI changes case slightly
                         if key in new_row:
                             new_row[key] = value
                     new_row['Status'] = "Success"
@@ -151,21 +149,19 @@ if uploaded_file and api_key:
             # --- FINISH ---
             output_df = pd.DataFrame(final_rows)
             
+            # Reorder columns to match Myntra Template exactly
+            valid_headers = [h for h in current_rules['headers'] if h in output_df.columns]
+            output_df = output_df[valid_headers + ['Status']] # Add status at end
+
             st.success("✅ Processing Complete!")
             
-            # Show preview of failures if any
-            failed_rows = output_df[output_df['Status'].str.contains("Failed")]
-            if not failed_rows.empty:
-                st.warning(f"⚠️ {len(failed_rows)} rows failed. Check the 'Status' column in the download.")
-                st.dataframe(failed_rows[['vendorSkuCode', 'Status']])
-
             # Download
             excel_file = f"Myntra_Result_{int(time.time())}.xlsx"
             output_df.to_excel(excel_file, index=False)
             
             with open(excel_file, "rb") as f:
                 st.download_button(
-                    label="📥 Download Result (With Error Logs)",
+                    label="📥 Download Result",
                     data=f,
                     file_name=excel_file,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -173,4 +169,3 @@ if uploaded_file and api_key:
                 
         except Exception as e:
             st.error(f"Critical Error: {str(e)}")
-
