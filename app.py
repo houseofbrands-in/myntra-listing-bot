@@ -13,7 +13,7 @@ st.title("🛍️ Automated Myntra Listing Engine (Debug Mode)")
 st.markdown("Upload your Excel. If it fails, check the 'Status Log' below.")
 
 # 1. API KEY INPUT
-api_key = st.text_input("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", type="password")
+api_key = st.text_input("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", type="password")
 
 # 2. LOAD CATEGORY RULES
 try:
@@ -173,3 +173,4 @@ if uploaded_file and api_key:
                 
         except Exception as e:
             st.error(f"Critical Error: {str(e)}")
+
