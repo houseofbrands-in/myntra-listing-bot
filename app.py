@@ -6,7 +6,7 @@ import requests
 from openai import OpenAI
 import time
 
-st.set_page_config(page_title="Myntra Listing Bot", layout="wide")
+st.set_page_config(page_title="Myntra Dynamic Agent", layout="wide")
 
 # --- SECURE KEY ---
 try:
@@ -16,7 +16,7 @@ except:
     st.error("❌ API Key not found in Secrets!")
     st.stop()
 
-# --- LOAD RULES ---
+# --- LOAD DEFAULT KNOWLEDGE BASE ---
 try:
     with open('categories.json', 'r') as f:
         CATEGORY_RULES = json.load(f)
@@ -24,12 +24,51 @@ except:
     st.error("❌ 'categories.json' not found.")
     st.stop()
 
-selected_category = st.selectbox("Select Category", list(CATEGORY_RULES.keys()))
-current_rules = CATEGORY_RULES[selected_category]
+# ================= SIDEBAR CONFIGURATION =================
+st.sidebar.header("⚙️ Configuration")
 
-# --- COLUMN MAPPING CONFIGURATION ---
-# Format: "Myntra Header": ["Your Excel Header 1", "Your Excel Header 2"]
-# This tells the script: "If you can't find 'Manufacturer...', look for 'Manufacturer Name' instead."
+# 1. Select Base Knowledge
+selected_category = st.sidebar.selectbox("1. AI Knowledge Base", list(CATEGORY_RULES.keys()))
+base_rules = CATEGORY_RULES[selected_category]
+
+# 2. Dynamic Rule Editing (Edit Fabrics/Colors on the fly)
+st.sidebar.markdown("### 2. Customize Valid Options")
+# We let you edit the fabric list directly in the app
+default_fabrics = ", ".join(base_rules['valid_options'].get('Fabric', []))
+custom_fabrics = st.sidebar.text_area("Valid Fabrics (comma separated)", value=default_fabrics, height=100)
+
+# Update the rules with your custom list
+current_rules = base_rules.copy()
+current_rules['valid_options']['Fabric'] = [x.strip() for x in custom_fabrics.split(',')]
+
+# ================= MAIN APP =================
+st.title("🛍️ Myntra Dynamic Listing Agent")
+st.markdown("Automate **Any Category** by uploading the target template.")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.info("Step 1: Upload the empty Myntra Template (Defines Columns & Order)")
+    template_file = st.file_uploader("Upload Target Template (.xlsx)", type=["xlsx"])
+
+with col2:
+    st.info("Step 2: Upload your Raw Product Data")
+    input_file = st.file_uploader("Upload Input Data (.xlsx)", type=["xlsx"])
+
+# --- DETERMINE HEADERS ---
+target_headers = []
+
+if template_file:
+    # If user uploads a template, WE USE THAT exactly.
+    temp_df = pd.read_excel(template_file)
+    target_headers = temp_df.columns.tolist()
+    st.success(f"✅ Template Loaded! Detected {len(target_headers)} columns (starting with '{target_headers[0]}').")
+else:
+    # Fallback to JSON headers if no template provided
+    target_headers = current_rules['headers']
+    st.warning("⚠️ No Template uploaded. Using default headers from JSON.")
+
+# --- MAPPING DICTIONARY (Smart Auto-Map) ---
 COLUMN_MAPPING = {
     "Manufacturer Name and Address with Pincode": ["Manufacturer Name", "Manufacturer", "Mfg Name"],
     "Packer Name and Address with Pincode": ["Packer Name", "Packer"],
@@ -56,8 +95,12 @@ def analyze_image(client, image_url, user_inputs, rules):
 
     prompt = f"""
     {rules.get('system_prompt', '')}
+    
     USER INPUTS: {user_inputs}
-    VALID OPTIONS: {json.dumps(rules['valid_options'], indent=2)}
+    
+    VALID OPTIONS (Strictly enforce these): 
+    {json.dumps(rules['valid_options'], indent=2)}
+    
     RETURN RAW JSON.
     """
 
@@ -75,14 +118,13 @@ def analyze_image(client, image_url, user_inputs, rules):
     except Exception as e:
         return None, str(e)
 
-# --- MAIN APP ---
-uploaded_file = st.file_uploader("Upload Input Excel", type=["xlsx"])
-
-if uploaded_file and st.button("🚀 Start Generation"):
-    df = pd.read_excel(uploaded_file)
+# --- EXECUTION ---
+if input_file and st.button("🚀 Start Generation"):
+    if not api_key: st.stop()
+    
+    df = pd.read_excel(input_file)
     
     # 1. SMART COLUMN RENAMING
-    # Renames your columns (e.g. "Manufacturer Name") to match Myntra ("Manufacturer Name and Address...")
     for target_col, possible_names in COLUMN_MAPPING.items():
         for name in possible_names:
             if name in df.columns:
@@ -90,15 +132,17 @@ if uploaded_file and st.button("🚀 Start Generation"):
                 break
     
     if "Front Image" not in df.columns:
-        st.error(f"❌ Error: Could not find 'Front Image' column. Found: {list(df.columns)}")
+        st.error(f"❌ Error: Could not find 'Front Image' column.")
         st.stop()
 
     progress_bar = st.progress(0)
+    status_text = st.empty()
     final_rows = []
     image_cache = {}
     
     for index, row in df.iterrows():
         sku = row.get('vendorSkuCode', f'Row {index}')
+        status_text.text(f"Processing: {sku}")
         progress_bar.progress((index + 1) / len(df))
         
         img_link = str(row.get('Front Image', '')).strip()
@@ -111,40 +155,39 @@ if uploaded_file and st.button("🚀 Start Generation"):
             ai_data, _ = analyze_image(client, img_link, hints, current_rules)
             if ai_data: image_cache[img_link] = ai_data
 
-        # --- BUILDING THE ROW ---
-        # 1. Start with Empty Dictionary based on Headers
-        new_row = {header: "" for header in current_rules['headers']}
+        # --- BUILDING THE ROW (Dynamic Mapping) ---
+        # 1. Start with Empty Dictionary based on TARGET HEADERS (From Template)
+        new_row = {header: "" for header in target_headers}
         
-        # 2. Fill from Input Excel (Prioritize User Data)
+        # 2. Fill from Input Excel
         for col in df.columns:
             if col in new_row:
                 new_row[col] = row[col]
         
-        # 3. Fill from Category Defaults (e.g. ArticleType)
-        if 'defaults' in current_rules:
-            for k, v in current_rules['defaults'].items():
-                if k in new_row: new_row[k] = v
-
-        # 4. Fill from AI (If empty in Input)
+        # 3. Fill from AI
         if ai_data:
             for k, v in ai_data.items():
                 if k in new_row:
                     new_row[k] = v
         
+        # 4. Defaults
+        if 'defaults' in current_rules:
+             for k, v in current_rules['defaults'].items():
+                if k in new_row: new_row[k] = v
+
         new_row['Status'] = "Success" if ai_data else "Failed"
         final_rows.append(new_row)
 
-    # --- FINAL OUTPUT GENERATION ---
+    # --- FINAL OUTPUT ---
     output_df = pd.DataFrame(final_rows)
     
-    # CRITICAL: Force the exact column order from JSON
-    ordered_cols = [h for h in current_rules['headers'] if h in output_df.columns]
-    output_df = output_df[ordered_cols + ['Status']] # Add status at the very end
+    # FORCE ORDER based on Template
+    ordered_cols = [h for h in target_headers if h in output_df.columns]
+    output_df = output_df[ordered_cols + ['Status']]
     
-    # Save & Download
     outfile = f"Myntra_Result_{int(time.time())}.xlsx"
     output_df.to_excel(outfile, index=False)
-    with open(outfile, "rb") as f:
-        st.download_button("📥 Download Final Result", f, file_name=outfile)
     
     st.success("✅ Done!")
+    with open(outfile, "rb") as f:
+        st.download_button("📥 Download Final Result", f, file_name=outfile)
