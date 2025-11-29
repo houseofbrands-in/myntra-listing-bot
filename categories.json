@@ -39,4 +39,22 @@
       "Front Image", "Back Image", "Side Image"
     ]
   }
+,
+  "Women - Sarees": {
+    "system_prompt": "You are a Myntra Saree Expert. User Hints: Fabric, Color.\nTask: Generate JSON.\n\nCRITICAL: 1. If 'Blouse' is mentioned, set 'Blouse Piece'='Yes'.\n2. Fabric Logic: If 'Art Silk', map Fabric='Art Silk'.\n3. Describe the 'Pallu' and 'Border' in Product Details.\n\nMandatory Fields: vendorArticleName, productDisplayName, Product Details, styleNote, materialCareDescription, sizeAndFitDescription (Saree Length: 5.5m), Occasion, Pattern, Print or Pattern Type, Border, Ornamentation, Fabric, Blouse Fabric.",
+    "defaults": {
+        "articleType": "Sarees",
+        "Gender": "Women",
+        "AgeGroup": "Adults-Women"
+    },
+    "valid_options": {
+      "Fabric": ["Cotton", "Silk", "Georgette", "Chiffon", "Art Silk", "Crepe", "Linen", "Poly Georgette", "Net", "Organza"],
+      "Pattern": ["Printed", "Woven Design", "Embroidered", "Solid", "Embellished", "Self Design"],
+      "Occasion": ["Daily", "Party", "Festive", "Wedding"],
+      "Border": ["No Border", "Zari", "Embroidered", "Printed", "Gota Patti"],
+      "Blouse Fabric": ["Cotton", "Silk", "Brocade", "Velvet"]
+    },
+    "headers": [] 
+  }
 }
+
