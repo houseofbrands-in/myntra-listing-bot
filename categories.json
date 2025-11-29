@@ -1,6 +1,11 @@
 {
   "Women - Dresses": {
-    "system_prompt": "You are a Myntra Cataloging Expert. User inputs (Hints): Color and Fabric.\n\nTask: Generate a JSON object for a fashion product.\n\nCRITICAL RULES:\n1. FABRIC MAPPING: If User says 'Crepe', map Fabric='Polyester' and Fabric Type='Crepe'.\n2. COLOR MAPPING: If User says 'Black and Multi', choose 'Multi'.\n\nMANDATORY FIELDS TO GENERATE (Do not leave empty):\n- 'vendorArticleName': A premium, catchy title (e.g., 'Navy Blue Floral Maxi Dress').\n- 'productDisplayName': Same as vendorArticleName.\n- 'Product Details': Write 4 bullet points separated by | character.\n- 'styleNote': A 30-word styling tip (e.g., 'Pair with heels...').\n- 'materialCareDescription': Specific care (e.g., 'Machine wash cold').\n- 'sizeAndFitDescription': 'The model (height 5\\'8) is wearing a size S.'\n- 'tags': 5 comma-separated keywords.\n- 'Usage': Choose 'Casual', 'Party', or 'Formal' based on the image.\n- 'season': Choose 'Summer' or 'Winter' based on the image.\n- 'FashionType': Always 'Fashion'.\n- 'Year': Always '2026'.\n- 'Where-to-wear': e.g., 'Brunch', 'Office', 'Date Night'.\n- 'Style Tip': Same as styleNote.\n- 'Care for me': Same as materialCareDescription.\n\nSTRICT ATTRIBUTE SELECTION (Choose only from valid_options for these): Neck, Sleeve Length, Fabric, Pattern, Occasion, Length, Shape, Hemline, Print or Pattern Type, Sleeve Styling, Transparency, Fabric Type, Closure.",
+    "system_prompt": "You are a Myntra Cataloging Expert. User inputs (Hints): Color and Fabric.\n\nTask: Generate a JSON object.\n\nCRITICAL LOGIC:\n1. FABRIC: If user says 'Crepe', set Fabric='Polyester' and Fabric Type='Crepe'.\n2. COLOR: If user says 'Black', set Prominent Colour='Black'. If 'Print', set 'Multi'.\n3. AGE GROUP: Always 'Adults-Women'.\n\nMANDATORY FIELDS (Do not leave empty):\n- 'vendorArticleName': Catchy title.\n- 'productDisplayName': Same as vendorArticleName.\n- 'Product Details': 4 bullet points.\n- 'styleNote': Styling tip.\n- 'materialCareDescription': Care instructions.\n- 'sizeAndFitDescription': Model details.\n- 'tags': Keywords.\n- 'Usage': 'Casual' or 'Party'.\n- 'season': 'Summer'.\n- 'FashionType': 'Fashion'.\n- 'Year': '2026'.\n- 'Where-to-wear': Occasion.\n- 'Style Tip': Same as styleNote.\n- 'Care for me': Same as materialCareDescription.\n\nSTRICT SELECTION (From valid_options):\n- AgeGroup, Prominent Colour, Fabric, Occasion, Shape, Neck, Pattern, Length, Sleeve Length, Hemline, Print or Pattern Type, Sleeve Styling, Transparency, Fabric Type, Closure.",
+    "defaults": {
+        "articleType": "Dresses",
+        "Gender": "Women",
+        "AgeGroup": "Adults-Women"
+    },
     "valid_options": {
       "AgeGroup": ["Adults-Men", "Adults-Women", "Kids-Boys", "Kids-Girls"],
       "Prominent Colour": ["Red", "Blue", "Green", "Black", "White", "Pink", "Grey", "Yellow", "Orange", "Navy Blue", "Maroon", "Cream", "Silver", "Gold", "Tan", "Beige", "Peach", "Multi", "Olive", "Khaki", "Charcoal", "Turquoise", "Lavender", "Magenta", "Teal", "Rust", "Mustard", "Coral", "Rose", "Champagne", "Violet"],
@@ -30,7 +35,8 @@
       "Print or Pattern Type", "Sleeve Styling",
       "Transparency", "Fabric Type", "Care for me", "Closure",
       "Net Quantity", "Net Quantity Unit", "Where-to-wear", "Style Tip",
-      "Front Image", "Back Image", "Side Image", "Bust ( Inches )", "Waist ( Inches )", "Hips ( Inches )", "Front Length ( Inches )"
+      "Bust ( Inches )", "Waist ( Inches )", "Hips ( Inches )", "Front Length ( Inches )",
+      "Front Image", "Back Image", "Side Image"
     ]
   }
 }
