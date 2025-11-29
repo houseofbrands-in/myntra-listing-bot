@@ -9,11 +9,18 @@ import time
 # ================= SETUP =================
 st.set_page_config(page_title="Myntra Listing Bot", layout="wide")
 
-st.title("🛍️ Automated Myntra Listing Engine (V3 - Full Data)")
-st.markdown("Upload your Excel. This version forces AI to fill descriptions.")
+# --- NEW: Get Key securely from Streamlit Cloud ---
+try:
+    api_key = st.secrets["OPENAI_API_KEY"]
+except:
+    st.error("❌ API Key not found! Please set it in Streamlit Secrets.")
+    st.stop()
+    
+client = OpenAI(api_key=api_key)
+# --------------------------------------------------
 
-# 1. API KEY INPUT
-api_key = st.text_input("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", type="password")
+st.title("🛍️ Automated Myntra Listing Engine (Agency Pro)")
+st.markdown("Upload your Excel. The AI is ready.")
 
 # 2. LOAD CATEGORY RULES
 try:
@@ -169,3 +176,4 @@ if uploaded_file and api_key:
                 
         except Exception as e:
             st.error(f"Critical Error: {str(e)}")
+
