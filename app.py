@@ -2,123 +2,119 @@ import streamlit as st
 import pandas as pd
 import json
 import base64
-import requests
 from io import BytesIO
 from openai import OpenAI
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ==========================================
-# 1. SETUP & AUTHENTICATION
+# 1. CONFIG & AUTHENTICATION
 # ==========================================
 
-st.set_page_config(page_title="Agency OS", layout="wide")
-st.title("Agency OS: Automated Cataloging")
+st.set_page_config(page_title="Agency OS - Version 7", layout="wide")
+st.title("Agency OS: AI Cataloging Automation")
 
-# Authentication
+# A. API Key Auth (Checks for both uppercase and lowercase styles)
 api_key = st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_key")
-if api_key:
-    client = OpenAI(api_key=api_key)
-else:
-    st.error("❌ API Key missing. Check secrets.toml")
+if not api_key:
+    st.error("❌ OpenAI API Key missing. Please check .streamlit/secrets.toml")
     st.stop()
 
+client = OpenAI(api_key=api_key)
+
+# B. Google Sheets Auth
 def connect_to_gsheets():
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        # Handle different secrets structures (nested or flat)
         if "gcp_service_account" in st.secrets:
             creds_dict = dict(st.secrets["gcp_service_account"])
         else:
             creds_dict = dict(st.secrets)
+            
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client_gs = gspread.authorize(creds)
+        # Open the database sheet
         return client_gs.open("Agency_OS_Database").worksheet("Configs")
     except Exception as e:
-        st.error(f"Database Error: {e}")
+        st.error(f"⚠️ Database Connection Error: {e}")
         return None
 
 # ==========================================
-# 2. HELPER: DOWNLOAD IMAGE (Dropbox Fixed)
+# 2. CORE AI LOGIC (Robust V7)
 # ==========================================
-def download_image_from_url(url):
-    if not isinstance(url, str):
-        return None
+
+def analyze_image_configured(image_bytes, config_json_str):
+    """
+    Takes an image and a JSON config.
+    Returns a JSON dictionary extracted from the image based on rules.
+    """
+    # 1. Parse Configuration
     try:
-        url = url.strip()
-        # Dropbox Fix
-        if "dropbox.com" in url:
-            if "?dl=0" in url: url = url.replace("?dl=0", "?dl=1")
-            elif "?dl=1" not in url: url += "?dl=1" if "?" in url else "?dl=1"
+        if isinstance(config_json_str, str):
+            config = json.loads(config_json_str)
+        else:
+            config = config_json_str
+            
+        # SAFETY FIX: If config is a single dict (legacy error), wrap it in a list
+        if isinstance(config, dict):
+            config = [config]
+            
+    except json.JSONDecodeError:
+        return {}
 
-        response = requests.get(url, timeout=15)
-        if response.status_code == 200:
-            return response.content
-        return None
-    except:
-        return None
-
-# ==========================================
-# 3. AI LOGIC (CRITICAL FIX APPLIED)
-# ==========================================
-def analyze_image_configured(image_bytes, config_json, seo_keywords=""):
-    # 1. Parse JSON if string
-    if isinstance(config_json, str):
-        try: config_json = json.loads(config_json)
-        except: return {}
-
-    # === BUG FIX: Normalize Data Structure ===
-    # If config is a single dictionary, wrap it in a list
-    if isinstance(config_json, dict):
-        config_json = [config_json]
-    # =========================================
-
-    strict_fields = []
-    creative_fields = []
-
-    for field in config_json:
-        # Safety check to ensure 'field' is actually a dict
+    # 2. Build Prompt based on Column Type
+    ai_instructions = []
+    
+    for field in config:
+        # Safety check for malformed rules
         if not isinstance(field, dict): continue
-
+        
         if field.get("Type") == "AI":
-            col_name = field.get("Column")
+            col = field.get("Column")
             options = field.get("Options", [])
             
-            # STRICT MODE
-            if isinstance(options, list) and len(options) > 0:
-                clean_opts = [str(opt).strip() for opt in options if pd.notna(opt)]
-                options_str = ", ".join([f"'{opt}'" for opt in clean_opts])
-                strict_fields.append(f"- **{col_name}**: Choose strictly from [{options_str}]")
-            # CREATIVE MODE
+            if options and isinstance(options, list) and len(options) > 0:
+                # STRICT MODE: Force choice from dropdown
+                opts_str = ", ".join([f"'{str(x).strip()}'" for x in options if pd.notna(x)])
+                ai_instructions.append(f"- **{col}**: Choose strictly from [{opts_str}]")
             else:
-                col_lower = col_name.lower()
-                if "tag" in col_lower: guide = f"Generate SEO tags. Context: {seo_keywords}."
-                elif "name" in col_lower: guide = f"Generate Product Name. Context: {seo_keywords}."
-                else: guide = f"Write description. Context: {seo_keywords}."
-                creative_fields.append(f"- **{col_name}**: {guide}")
+                # CREATIVE MODE: Generate text (Description, Name, etc.)
+                ai_instructions.append(f"- **{col}**: Generate a detailed, accurate value describing the visual product.")
 
-    if not strict_fields and not creative_fields: return {}
+    if not ai_instructions:
+        return {}
 
-    prompt_sections = []
-    if strict_fields: prompt_sections.append("### STRICT FIELDS (Pick Exact Option)\n" + "\n".join(strict_fields))
-    if creative_fields: prompt_sections.append("### CREATIVE FIELDS (Write Content)\n" + "\n".join(creative_fields))
-
-    system_prompt = "You are a Cataloging AI. Output ONLY valid JSON."
-    user_prompt = f"Analyze image.\n\n" + "\n\n".join(prompt_sections) + "\n\nReturn JSON object."
+    # 3. Construct System Prompt
+    system_text = (
+        "You are a Senior E-commerce QA Specialist. "
+        "Your job is to inspect product images and extract attributes.\n"
+        "RULES:\n"
+        "1. Return ONLY valid JSON.\n"
+        "2. If a list of options is provided, you MUST pick one exactly. Do not hallucinate.\n"
+        "3. If visual evidence is missing, return 'N/A'."
+    )
     
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    user_text = (
+        f"Analyze this product image and generate JSON for these fields:\n\n"
+        + "\n".join(ai_instructions) + 
+        "\n\nReturn the JSON object."
+    )
 
+    # 4. Call GPT-4o
     try:
+        base64_img = base64.b64encode(image_bytes).decode('utf-8')
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": system_text},
                 {"role": "user", "content": [
-                    {"type": "text", "text": user_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
                 ]}
             ],
-            max_tokens=800,
-            temperature=0.4, 
+            max_tokens=600,
+            temperature=0.2, # Low temp for strict adherence
             response_format={"type": "json_object"}
         )
         return json.loads(response.choices[0].message.content)
@@ -126,130 +122,174 @@ def analyze_image_configured(image_bytes, config_json, seo_keywords=""):
         return {"Error": str(e)}
 
 # ==========================================
-# 4. USER INTERFACE
+# 3. USER INTERFACE (TABS)
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["⚙️ Setup", "🚀 Run (Excel Input)", "✏️ Edit Configs"])
 
-# --- TAB 1: SETUP ---
+tab1, tab2, tab3 = st.tabs(["⚙️ Setup", "🚀 Run", "🗂️ Manage"])
+
+# ------------------------------------------
+# TAB 1: SETUP (Upload -> Map -> Save)
+# ------------------------------------------
 with tab1:
-    st.header("1. Define Rules")
+    st.header("1. Define Marketplace Rules")
+    
     c1, c2 = st.columns(2)
-    template_file = c1.file_uploader("Upload Blank Template", type=["xlsx", "csv"])
-    master_file = c2.file_uploader("Upload Master Data (Dropdowns)", type=["xlsx", "csv"])
+    template_file = c1.file_uploader("Upload Blank Marketplace Template (Excel/CSV)", type=["xlsx", "csv"])
+    master_file = c2.file_uploader("Upload Master Data / Dropdowns (Excel/CSV)", type=["xlsx", "csv"])
 
-    final_master_options = {}
+    # Store Master Options for linking
+    master_options = {}
+    
+    # Process Master Data
     if master_file:
-        df_master = pd.read_csv(master_file) if master_file.name.endswith('.csv') else pd.read_excel(master_file)
-        st.caption("👇 Edit your dropdowns here if needed:")
-        edited_df = st.data_editor(df_master, num_rows="dynamic")
-        for col in edited_df.columns:
-            final_master_options[col] = edited_df[col].dropna().unique().tolist()
+        try:
+            df_master = pd.read_csv(master_file) if master_file.name.endswith('.csv') else pd.read_excel(master_file)
+            # Basic cleaning
+            for col in df_master.columns:
+                master_options[col] = df_master[col].dropna().unique().tolist()
+            st.success(f"✅ Loaded Dropdowns for: {', '.join(master_options.keys())}")
+        except Exception as e:
+            st.error(f"Error reading Master Data: {e}")
 
+    # Process Template & Mapping
     if template_file:
         st.divider()
         st.subheader("2. Map Columns")
-        df_temp = pd.read_csv(template_file) if template_file.name.endswith('.csv') else pd.read_excel(template_file)
-        
-        config_builder = []
-        with st.form("mapping_form"):
-            for col in df_temp.columns:
-                c_a, c_b = st.columns([2, 1])
-                c_a.write(f"**{col}**")
-                type_ = c_b.selectbox("Type", ["Fixed", "Input", "AI"], key=f"t_{col}", label_visibility="collapsed")
-                
-                field_data = {"Column": col, "Type": type_, "Options": []}
-                if type_ == "AI" and col in final_master_options:
-                    field_data["Options"] = final_master_options[col]
-                config_builder.append(field_data)
-            
-            st.divider()
-            name = st.text_input("Config Name (e.g. Myntra Kurta)")
-            if st.form_submit_button("Save Config"):
-                ws = connect_to_gsheets()
-                ws.append_row([name, json.dumps(config_builder)])
-                st.success("Saved!")
-
-# --- TAB 2: RUN (EXCEL + URL SUPPORT) ---
-with tab2:
-    st.header("Generate Catalog from Excel")
-    ws = connect_to_gsheets()
-    all_data = ws.get_all_values() if ws else []
-    config_names = [r[0] for r in all_data]
-    
-    selected_conf = st.selectbox("1. Select Category", config_names)
-    input_excel = st.file_uploader("2. Upload Input Excel", type=['xlsx'])
-    seo_keywords = st.text_area("3. SEO Keywords (Optional)", placeholder="Summer, Cotton, etc.")
-
-    if st.button("Generate") and input_excel:
-        json_str = next((r[1] for r in all_data if r[0] == selected_conf), "[]")
-        df_input = pd.read_excel(input_excel)
-        
-        # FIND IMAGE COLUMN (flexible matching)
-        img_col = next((c for c in df_input.columns if "link" in c.lower() or "url" in c.lower() or "image" in c.lower()), None)
-        
-        if not img_col:
-            st.error("❌ Could not find a column named 'Image Link', 'Image URL' or 'Image' in your Excel.")
-        else:
-            st.success(f"✅ Found Image Column: '{img_col}'. Starting processing...")
-            progress = st.progress(0)
-            
-            for index, row in df_input.iterrows():
-                url = str(row[img_col]).strip()
-                
-                # Download Image (Handles Dropbox)
-                img_bytes = download_image_from_url(url)
-                
-                if img_bytes:
-                    # Run AI
-                    ai_result = analyze_image_configured(img_bytes, json_str, seo_keywords)
-                    
-                    # Update Row
-                    for key, value in ai_result.items():
-                        if key in df_input.columns:
-                            df_input.at[index, key] = value
-                else:
-                    st.warning(f"⚠️ Row {index+1}: Could not download image. Check if link is valid.")
-                
-                progress.progress((index + 1) / len(df_input))
-            
-            # Export
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_input.to_excel(writer, index=False)
-            output.seek(0)
-            st.success("Processing Complete!")
-            st.download_button("Download Output File", data=output, file_name="Generated_Catalog.xlsx")
-
-# --- TAB 3: EDIT (ROBUST) ---
-with tab3:
-    st.header("Manage Configs")
-    ws = connect_to_gsheets()
-    all_data = ws.get_all_values() if ws else []
-    
-    if all_data:
-        edit_choice = st.selectbox("Select to Edit", [r[0] for r in all_data])
-        row_idx = [r[0] for r in all_data].index(edit_choice) + 1
-        current_json = all_data[row_idx - 1][1]
-        
         try:
-            data = json.loads(current_json)
-            if isinstance(data, dict): data = [data] # Fix for single-object error
+            df_temp = pd.read_csv(template_file) if template_file.name.endswith('.csv') else pd.read_excel(template_file)
+            columns = df_temp.columns.tolist()
             
-            df_edit = pd.DataFrame(data)
-            # Flatten list options for editing
-            if 'Options' in df_edit.columns:
-                df_edit['Options'] = df_edit['Options'].apply(lambda x: ", ".join(x) if isinstance(x, list) else "")
+            config_list = []
             
-            edited = st.data_editor(df_edit, num_rows="dynamic", use_container_width=True)
-            
-            if st.button("Save Changes"):
-                new_list = []
-                for _, row in edited.iterrows():
-                    opts = [x.strip() for x in str(row.get('Options','')).split(',') if x.strip()]
-                    new_list.append({"Column": row['Column'], "Type": row['Type'], "Options": opts})
+            with st.form("config_form"):
+                for col in columns:
+                    c_a, c_b = st.columns([2, 1])
+                    c_a.write(f"**{col}**")
+                    field_type = c_b.selectbox("Type", ["Fixed", "Input", "AI"], key=f"type_{col}", label_visibility="collapsed")
+                    
+                    # Auto-link options if column name matches Master Data
+                    opts = []
+                    if field_type == "AI" and col in master_options:
+                        opts = master_options[col]
+                        c_a.caption(f"🔗 Linked to {len(opts)} options")
+                    
+                    config_list.append({
+                        "Column": col,
+                        "Type": field_type,
+                        "Options": opts
+                    })
                 
-                ws.update_cell(row_idx, 2, json.dumps(new_list))
-                st.success("Updated!")
-                st.rerun()
+                st.divider()
+                cat_name = st.text_input("Configuration Name (e.g. 'Myntra Kurta')")
+                submitted = st.form_submit_button("Save Configuration to Database")
+                
+                if submitted and cat_name:
+                    ws = connect_to_gsheets()
+                    if ws:
+                        # Append row: [Name, JSON String]
+                        ws.append_row([cat_name, json.dumps(config_list)])
+                        st.success(f"🎉 Saved '{cat_name}' to Google Sheets!")
         except Exception as e:
-            st.error(f"Error loading config: {e}")
+            st.error(f"Error reading Template: {e}")
+
+# ------------------------------------------
+# TAB 2: RUN (Select -> Upload Images -> Excel)
+# ------------------------------------------
+with tab2:
+    st.header("Generate Listings")
+    
+    ws = connect_to_gsheets()
+    if ws:
+        # Fetch Configs
+        try:
+            data_rows = ws.get_all_values()
+        except:
+            data_rows = []
+            
+        if not data_rows:
+            st.warning("No configurations found in Database. Go to Setup tab.")
+        else:
+            # Column A is Name
+            config_names = [row[0] for row in data_rows]
+            selected_config = st.selectbox("Select Category", config_names)
+            
+            # Retrieve the JSON for the selected config
+            config_json_str = next((row[1] for row in data_rows if row[0] == selected_config), None)
+            
+            uploaded_files = st.file_uploader("Upload Product Images", accept_multiple_files=True, type=['png', 'jpg', 'jpeg'])
+            
+            if st.button("Start AI Processing"):
+                if not uploaded_files:
+                    st.warning("Please upload at least one image.")
+                elif not config_json_str:
+                    st.error("Configuration error.")
+                else:
+                    results = []
+                    progress_bar = st.progress(0)
+                    
+                    for idx, img_file in enumerate(uploaded_files):
+                        # 1. Run AI
+                        ai_data = analyze_image_configured(img_file.getvalue(), config_json_str)
+                        
+                        # 2. Map to Template Columns
+                        row_data = {"Image Name": img_file.name}
+                        
+                        # Parse config to ensure we respect column order
+                        try:
+                            config_obj = json.loads(config_json_str)
+                            if isinstance(config_obj, dict): config_obj = [config_obj] # Safety fix
+                            
+                            for rule in config_obj:
+                                col = rule["Column"]
+                                r_type = rule["Type"]
+                                
+                                if r_type == "AI":
+                                    row_data[col] = ai_data.get(col, "")
+                                elif r_type == "Fixed":
+                                    row_data[col] = "FIXED_VALUE"
+                                else:
+                                    row_data[col] = "" # Input
+                        except:
+                            pass
+                            
+                        results.append(row_data)
+                        progress_bar.progress((idx + 1) / len(uploaded_files))
+                    
+                    # 3. Create DataFrame & Download
+                    df_final = pd.DataFrame(results)
+                    st.success("Processing Complete!")
+                    st.dataframe(df_final)
+                    
+                    # Export to Excel
+                    output = BytesIO()
+                    # Using default engine to avoid missing dependency errors
+                    with pd.ExcelWriter(output) as writer:
+                        df_final.to_excel(writer, index=False)
+                    output.seek(0)
+                    
+                    st.download_button(
+                        label="Download Excel File",
+                        data=output,
+                        file_name=f"{selected_config}_Generated.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+# ------------------------------------------
+# TAB 3: MANAGE (Cleanup)
+# ------------------------------------------
+with tab3:
+    st.header("Database Management")
+    
+    if st.button("Refresh List"):
+        st.rerun()
+
+    ws = connect_to_gsheets()
+    if ws:
+        rows = ws.get_all_values()
+        if rows:
+            df_db = pd.DataFrame(rows, columns=["Category Name", "Config JSON"])
+            st.dataframe(df_db)
+            st.info("To delete, please delete the row directly in your Google Sheet.")
+            st.markdown(f"[Open Google Sheet](https://docs.google.com/spreadsheets/d/{ws.spreadsheet.id})")
+        else:
+            st.write("Database is empty.")
