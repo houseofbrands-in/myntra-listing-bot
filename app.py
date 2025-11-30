@@ -229,13 +229,16 @@ with tab2:
             st.download_button("Download Completed Excel", data=output, file_name="Completed_Catalog.xlsx")
 
 # ------------------------------------------
-# TAB 3: EDIT CONFIGS (New Feature)
+# TAB 3: EDIT CONFIGS (Fixed & Robust)
 # ------------------------------------------
 with tab3:
     st.header("Edit Existing Configurations")
     
     ws = connect_to_gsheets()
-    all_data = ws.get_all_values()
+    if ws:
+        all_data = ws.get_all_values()
+    else:
+        all_data = []
     
     if len(all_data) > 0:
         # Select Config to Edit
@@ -246,39 +249,59 @@ with tab3:
         row_idx = config_names.index(edit_choice) + 1
         current_json_str = all_data[row_idx - 1][1]
         
-        try:
-            current_config = json.loads(current_json_str)
-            df_config = pd.DataFrame(current_config)
-            
-            st.subheader(f"Editing: {edit_choice}")
-            st.info("👇 You can change Types or Edit Options. For 'Options', enter values separated by commas.")
-            
-            # Helper to display options as string
-            df_config['Options'] = df_config['Options'].apply(lambda x: ", ".join(x) if isinstance(x, list) else "")
-            
-            # Editable Dataframe
-            edited_df = st.data_editor(df_config, num_rows="dynamic", use_container_width=True)
-            
-            if st.button("Save Changes"):
-                # Convert back to JSON structure
-                new_config_list = []
-                for _, row in edited_df.iterrows():
-                    # Parse options back to list
-                    opts_str = str(row['Options'])
-                    opts_list = [x.strip() for x in opts_str.split(',') if x.strip()]
+        if current_json_str:
+            try:
+                current_config = json.loads(current_json_str)
+                
+                # === BUG FIX START ===
+                # If the data is a single Dictionary (One rule), wrap it in a list.
+                # If the data is a List (Multiple rules), keep it as is.
+                if isinstance(current_config, dict):
+                    current_config = [current_config]
+                # === BUG FIX END ===
+                
+                df_config = pd.DataFrame(current_config)
+                
+                st.subheader(f"Editing: {edit_choice}")
+                st.info("👇 You can change Types or Edit Options. For 'Options', enter values separated by commas.")
+                
+                # Helper to display options as string for editing
+                # We use .get('Options') to avoid errors if the column is missing
+                if 'Options' in df_config.columns:
+                    df_config['Options'] = df_config['Options'].apply(
+                        lambda x: ", ".join(x) if isinstance(x, list) else str(x) if pd.notna(x) else ""
+                    )
+                else:
+                    df_config['Options'] = ""
+                
+                # Editable Dataframe
+                edited_df = st.data_editor(df_config, num_rows="dynamic", use_container_width=True)
+                
+                if st.button("Save Changes"):
+                    # Convert back to JSON structure
+                    new_config_list = []
+                    for _, row in edited_df.iterrows():
+                        # Parse options back to list
+                        opts_str = str(row.get('Options', ''))
+                        opts_list = [x.strip() for x in opts_str.split(',') if x.strip()]
+                        
+                        new_config_list.append({
+                            "Column": row.get('Column', 'Unknown'),
+                            "Type": row.get('Type', 'Fixed'),
+                            "Options": opts_list
+                        })
                     
-                    new_config_list.append({
-                        "Column": row['Column'],
-                        "Type": row['Type'],
-                        "Options": opts_list
-                    })
-                
-                new_json_str = json.dumps(new_config_list)
-                
-                # Update Google Sheet (Row, Col 2)
-                ws.update_cell(row_idx, 2, new_json_str)
-                st.success(f"✅ Configuration '{edit_choice}' updated successfully!")
-                st.rerun()
-                
-        except json.JSONDecodeError:
-            st.error("Error loading configuration data.")
+                    new_json_str = json.dumps(new_config_list)
+                    
+                    # Update Google Sheet (Row, Col 2)
+                    ws.update_cell(row_idx, 2, new_json_str)
+                    st.success(f"✅ Configuration '{edit_choice}' updated successfully!")
+                    
+                    # Optional: Rerun to show updated state
+                    # st.rerun() 
+                    
+            except json.JSONDecodeError:
+                st.error("❌ Error: The saved data for this category is not valid JSON.")
+            except Exception as e:
+                st.error(f"❌ An error occurred: {e}")
+                st.write("Raw Data for debugging:", current_config)
