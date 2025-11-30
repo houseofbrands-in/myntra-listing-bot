@@ -4,6 +4,7 @@ openai
 gspread
 oauth2client
 xlsxwriter
+openpyxl
 requests
 Pillow
 rembg
