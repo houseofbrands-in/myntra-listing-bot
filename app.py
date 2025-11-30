@@ -38,15 +38,38 @@ def connect_to_gsheets():
         return None
 
 # ==========================================
-# 2. HELPER: DOWNLOAD IMAGE FROM URL
+# 2. HELPER: DOWNLOAD IMAGE (Dropbox Fixed)
 # ==========================================
 def download_image_from_url(url):
+    """
+    Downloads image bytes from a URL. 
+    Includes specific fix for Dropbox links to ensure direct download.
+    """
+    if not isinstance(url, str):
+        return None
+        
     try:
-        response = requests.get(url, timeout=10)
+        url = url.strip()
+        
+        # --- DROPBOX FIX ---
+        # Convert 'www.dropbox.com/.../file?dl=0' to '?dl=1'
+        if "dropbox.com" in url:
+            if "?dl=0" in url:
+                url = url.replace("?dl=0", "?dl=1")
+            elif "?dl=1" not in url:
+                # If no query param, append it
+                if "?" in url:
+                    url += "&dl=1"
+                else:
+                    url += "?dl=1"
+        # -------------------
+
+        response = requests.get(url, timeout=15)
         if response.status_code == 200:
             return response.content
         return None
-    except:
+    except Exception as e:
+        # st.write(f"Debug: Failed to download {url}: {e}")
         return None
 
 # ==========================================
@@ -110,7 +133,7 @@ def analyze_image_configured(image_bytes, config_json, seo_keywords=""):
 # ==========================================
 # 4. USER INTERFACE
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["⚙️ Setup", "🚀 Run (Excel Only)", "✏️ Edit Configs"])
+tab1, tab2, tab3 = st.tabs(["⚙️ Setup", "🚀 Run (Excel Input)", "✏️ Edit Configs"])
 
 # --- TAB 1: SETUP ---
 with tab1:
@@ -151,34 +174,36 @@ with tab1:
                 ws.append_row([name, json.dumps(config_builder)])
                 st.success("Saved!")
 
-# --- TAB 2: RUN (SIMPLIFIED) ---
+# --- TAB 2: RUN (EXCEL + URL SUPPORT) ---
 with tab2:
-    st.header("Generate Catalog")
+    st.header("Generate Catalog from Excel")
+    st.info("ℹ️ Ensure your Excel has a column with image URLs (e.g., Dropbox links).")
+    
     ws = connect_to_gsheets()
     all_data = ws.get_all_values() if ws else []
     config_names = [r[0] for r in all_data]
     
     selected_conf = st.selectbox("1. Select Category", config_names)
-    input_excel = st.file_uploader("2. Upload Input Excel (Must have 'Image Link' column)", type=['xlsx'])
+    input_excel = st.file_uploader("2. Upload Input Excel", type=['xlsx'])
     seo_keywords = st.text_area("3. SEO Keywords (Optional)", placeholder="Summer, Cotton, etc.")
 
     if st.button("Generate") and input_excel:
         json_str = next((r[1] for r in all_data if r[0] == selected_conf), "[]")
         df_input = pd.read_excel(input_excel)
         
-        # FIND IMAGE COLUMN
-        img_col = next((c for c in df_input.columns if "link" in c.lower() or "url" in c.lower()), None)
+        # FIND IMAGE COLUMN (flexible matching)
+        img_col = next((c for c in df_input.columns if "link" in c.lower() or "url" in c.lower() or "image" in c.lower()), None)
         
         if not img_col:
-            st.error("❌ Excel must have a column named 'Image Link' or 'Image URL'.")
+            st.error("❌ Could not find a column named 'Image Link', 'Image URL' or 'Image' in your Excel.")
         else:
-            st.info(f"Processing {len(df_input)} rows using images from column: '{img_col}'")
+            st.success(f"✅ Found Image Column: '{img_col}'. Starting processing...")
             progress = st.progress(0)
             
             for index, row in df_input.iterrows():
                 url = str(row[img_col]).strip()
                 
-                # Download Image
+                # Download Image (Handles Dropbox)
                 img_bytes = download_image_from_url(url)
                 
                 if img_bytes:
@@ -190,7 +215,7 @@ with tab2:
                         if key in df_input.columns:
                             df_input.at[index, key] = value
                 else:
-                    st.warning(f"Row {index+1}: Could not download image from {url}")
+                    st.warning(f"⚠️ Row {index+1}: Could not download image. Check if link is valid.")
                 
                 progress.progress((index + 1) / len(df_input))
             
@@ -199,8 +224,8 @@ with tab2:
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_input.to_excel(writer, index=False)
             output.seek(0)
-            st.success("Done!")
-            st.download_button("Download Output", data=output, file_name="Generated_Catalog.xlsx")
+            st.success("Processing Complete!")
+            st.download_button("Download Output File", data=output, file_name="Generated_Catalog.xlsx")
 
 # --- TAB 3: EDIT (ROBUST) ---
 with tab3:
