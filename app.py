@@ -41,59 +41,54 @@ def connect_to_gsheets():
 # 2. HELPER: DOWNLOAD IMAGE (Dropbox Fixed)
 # ==========================================
 def download_image_from_url(url):
-    """
-    Downloads image bytes from a URL. 
-    Includes specific fix for Dropbox links to ensure direct download.
-    """
     if not isinstance(url, str):
         return None
-        
     try:
         url = url.strip()
-        
-        # --- DROPBOX FIX ---
-        # Convert 'www.dropbox.com/.../file?dl=0' to '?dl=1'
+        # Dropbox Fix
         if "dropbox.com" in url:
-            if "?dl=0" in url:
-                url = url.replace("?dl=0", "?dl=1")
-            elif "?dl=1" not in url:
-                # If no query param, append it
-                if "?" in url:
-                    url += "&dl=1"
-                else:
-                    url += "?dl=1"
-        # -------------------
+            if "?dl=0" in url: url = url.replace("?dl=0", "?dl=1")
+            elif "?dl=1" not in url: url += "?dl=1" if "?" in url else "?dl=1"
 
         response = requests.get(url, timeout=15)
         if response.status_code == 200:
             return response.content
         return None
-    except Exception as e:
-        # st.write(f"Debug: Failed to download {url}: {e}")
+    except:
         return None
 
 # ==========================================
-# 3. AI LOGIC (Strict + Creative)
+# 3. AI LOGIC (CRITICAL FIX APPLIED)
 # ==========================================
 def analyze_image_configured(image_bytes, config_json, seo_keywords=""):
+    # 1. Parse JSON if string
     if isinstance(config_json, str):
         try: config_json = json.loads(config_json)
         except: return {}
+
+    # === BUG FIX: Normalize Data Structure ===
+    # If config is a single dictionary, wrap it in a list
+    if isinstance(config_json, dict):
+        config_json = [config_json]
+    # =========================================
 
     strict_fields = []
     creative_fields = []
 
     for field in config_json:
+        # Safety check to ensure 'field' is actually a dict
+        if not isinstance(field, dict): continue
+
         if field.get("Type") == "AI":
             col_name = field.get("Column")
             options = field.get("Options", [])
             
-            # STRICT MODE (Dropdowns)
+            # STRICT MODE
             if isinstance(options, list) and len(options) > 0:
                 clean_opts = [str(opt).strip() for opt in options if pd.notna(opt)]
                 options_str = ", ".join([f"'{opt}'" for opt in clean_opts])
                 strict_fields.append(f"- **{col_name}**: Choose strictly from [{options_str}]")
-            # CREATIVE MODE (Text)
+            # CREATIVE MODE
             else:
                 col_lower = col_name.lower()
                 if "tag" in col_lower: guide = f"Generate SEO tags. Context: {seo_keywords}."
@@ -177,8 +172,6 @@ with tab1:
 # --- TAB 2: RUN (EXCEL + URL SUPPORT) ---
 with tab2:
     st.header("Generate Catalog from Excel")
-    st.info("ℹ️ Ensure your Excel has a column with image URLs (e.g., Dropbox links).")
-    
     ws = connect_to_gsheets()
     all_data = ws.get_all_values() if ws else []
     config_names = [r[0] for r in all_data]
