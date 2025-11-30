@@ -11,18 +11,16 @@ from io import BytesIO
 import zipfile
 from PIL import Image, ImageOps
 
-# --- DEBUG IMPORT BLOCK ---
+# --- DEPENDENCY CHECK ---
 try:
     from rembg import remove as remove_bg_ai
     REMBG_AVAILABLE = True
 except ImportError as e:
     REMBG_AVAILABLE = False
-    # This will print the EXACT error at the top of your app so we can see it
-    st.error(f"⚠️ SYSTEM ERROR: Could not load 'rembg'. Reason: {e}")
-except Exception as e:
-    REMBG_AVAILABLE = False
-    st.error(f"⚠️ SYSTEM ERROR: Unexpected error loading 'rembg'. Reason: {e}")
-st.set_page_config(page_title="HOB OS - Secure", layout="wide")
+    # Only show error if we suspect they want to use it
+    # st.error(f"Note: rembg not installed. {e}") 
+
+st.set_page_config(page_title="HOB OS - V10.5", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -158,55 +156,38 @@ def encode_image_from_url(url):
         return (base64.b64encode(response.content).decode('utf-8'), None) if response.status_code == 200 else (None, "Download Error")
     except Exception as e: return None, str(e)
 
-# --- V10.4 IMPROVED IMAGE PROCESSOR ---
+# --- IMAGE PROCESSOR ---
 def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
     try:
         img = Image.open(image_file)
-        
-        # 1. AI Background Removal (If requested)
         if do_remove_bg:
-            if REMBG_AVAILABLE:
-                img = remove_bg_ai(img) # Returns RGBA
-            else:
-                return None, "rembg library not installed"
-        
-        # Ensure RGBA for transparency handling if needed
+            if REMBG_AVAILABLE: img = remove_bg_ai(img)
+            else: return None, "rembg not installed"
         img = img.convert("RGBA")
 
-        # 2. Resizing Logic
         if mode == "Stretch to Target (Distort)":
-            # Force dimensions (Ignore Aspect Ratio)
             img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
-            
-            # If removing BG, we usually want white background for Amazon, else keep transparent
             final_bg = Image.new("RGB", (target_w, target_h), (255, 255, 255))
-            final_bg.paste(img, (0, 0), img) # Paste using alpha as mask
+            final_bg.paste(img, (0, 0), img)
             return final_bg, None
 
         elif mode == "Resize Only (No Padding)":
-            # Shrink to fit within box, but keep aspect ratio. Result dimensions <= Target
             img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
-            
-            # Create final image of the exact size of the resized image (not the target box)
             final_w, final_h = img.size
             final_bg = Image.new("RGB", (final_w, final_h), (255, 255, 255))
             final_bg.paste(img, (0, 0), img)
             return final_bg, None
 
         elif mode == "Scale & Pad (White Bars)":
-            # Fit in box, keep ratio, fill rest with white (Standard Marketplace Square)
             img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
-            
             final_bg = Image.new("RGB", (target_w, target_h), (255, 255, 255))
-            # Center it
             left = (target_w - img.width) // 2
             top = (target_h - img.height) // 2
             final_bg.paste(img, (left, top), img)
             return final_bg, None
-            
-    except Exception as e:
-        return None, str(e)
+    except Exception as e: return None, str(e)
 
+# --- AI LOGIC (UPDATED V10.5) ---
 def analyze_image_configured(client, image_url, user_hints, keywords, config, marketplace):
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
@@ -226,8 +207,16 @@ def analyze_image_configured(client, image_url, user_hints, keywords, config, ma
     if keywords: seo_instruction = f"MANDATORY SEO KEYWORDS: {keywords}"
 
     mp_instruction = ""
+    # --- NEW: AMAZON HTML RULES ---
     if marketplace.lower() == "amazon":
-        mp_instruction = "AMAZON RULES: 1. Bullet Points: 5 distinct selling points (Material, Fit, Usage, Care, Design). 2. Search Terms: 250 bytes max. 3. Title: [Brand] + [Dept] + [Material] + [Style] + [Color]."
+        mp_instruction = """
+        AMAZON SPECIFIC RULES:
+        1. Bullet Points: Write 5 distinct selling points. MANDATORY: Start each bullet with a header in HTML bold tags, e.g., '<b>PREMIUM COTTON:</b> This fabric is...'.
+        2. Search Terms: Max 250 bytes, space separated, no commas.
+        3. Title: [Brand] + [Dept] + [Material] + [Style] + [Color].
+        """
+    elif marketplace.lower() == "myntra":
+        mp_instruction = "MYNTRA RULES: Focus on specific attributes (Neck, Sleeve, Pattern). Short, punchy title."
 
     prompt = f"""
     You are a Cataloging Expert for {marketplace}.
@@ -272,16 +261,25 @@ if not st.session_state.logged_in:
                     st.rerun()
                 else: st.error("Invalid Credentials")
 else:
+    # --- SIDEBAR POLISH (V10.5) ---
     st.sidebar.title("🌍 HOB OS")
-    st.sidebar.caption(f"User: {st.session_state.username} ({st.session_state.user_role})")
+    st.sidebar.caption(f"User: {st.session_state.username} | Role: {st.session_state.user_role}")
     if st.sidebar.button("Log Out"): st.session_state.logged_in = False; st.rerun()
     st.sidebar.divider()
 
     selected_mp = st.sidebar.selectbox("Marketplace", ["Myntra", "Flipkart", "Ajio", "Amazon", "Nykaa"])
     if st.sidebar.button("🔄 Refresh Data"): st.rerun()
+    
+    # Help Guide
+    with st.sidebar.expander("ℹ️ Quick Guide"):
+        st.markdown("""
+        **1. Setup:** Map your Excel columns to AI logic.
+        **2. SEO:** Inject keywords from Ads.
+        **3. Run:** Upload data & Generate.
+        **4. Tools:** Resize images for Marketplace.
+        """)
 
     mp_cats = get_categories_for_marketplace(selected_mp)
-    st.sidebar.write(f"{len(mp_cats)} Categories Found")
     
     base_tabs = ["🛠️ Setup", "📈 SEO", "🚀 Run", "🖼️ Tools"]
     if st.session_state.user_role.lower() == "admin": base_tabs += ["🗑️ Configs", "👥 Admin"]
@@ -345,7 +343,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN ---
+    # --- TAB 3: RUN (V10.5 SAFETY FEATURES) ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
         if not mp_cats: st.warning("No categories configured yet."); st.stop()
@@ -364,9 +362,24 @@ else:
         
         if input_file:
             df_input = pd.read_excel(input_file)
-            row_count = len(df_input)
-            c1, c2 = st.columns(2); c1.metric("📦 Items", row_count); c2.metric("💲 Est. Cost", f"${(row_count * 0.02):.2f}")
+            total_rows = len(df_input)
             
+            # --- NEW: RUN MODE SELECTOR ---
+            st.divider()
+            c_run1, c_run2 = st.columns([2,1])
+            with c_run1:
+                run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"], horizontal=True)
+            
+            if run_mode.startswith("🧪"):
+                df_to_process = df_input.head(3)
+                st.info("Test Mode Active: Processing only first 3 rows. Cost is negligible.")
+            else:
+                df_to_process = df_input
+                st.warning(f"Production Mode: Processing all {total_rows} rows.")
+
+            est_cost = len(df_to_process) * 0.02
+            st.metric("Estimated Cost", f"${est_cost:.2f}")
+
             if st.button("▶️ Start Generation"):
                 img_col = next((c for c in df_input.columns if "front" in c.lower() or "image" in c.lower() or "url" in c.lower()), None)
                 if not img_col: st.error("❌ No 'Image URL' column found."); st.stop()
@@ -374,9 +387,11 @@ else:
                 progress = st.progress(0); status = st.empty()
                 final_rows = []; cache = {}; mapping = config['column_mapping']
                 
-                for idx, row in df_input.iterrows():
-                    status.text(f"Processing {idx+1}/{row_count}")
-                    progress.progress((idx+1)/row_count)
+                current_total = len(df_to_process)
+                
+                for idx, row in df_to_process.iterrows():
+                    status.text(f"Processing {idx+1}/{current_total}")
+                    progress.progress((idx+1)/current_total)
                     
                     img_url = str(row.get(img_col, "")).strip()
                     ai_data = None
@@ -413,17 +428,12 @@ else:
                 output_gen = BytesIO()
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: pd.DataFrame(final_rows).to_excel(writer, index=False)
                 st.success("✅ Done!")
-                st.download_button("⬇️ Download Catalog", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
+                st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
 
-    # --- TAB 4: TOOLS (V10.4 IMPROVED) ---
+    # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🖼️ Bulk Image Processor")
-        st.markdown("""
-        **Features:**
-        1. **Size Control:** Set any width/height.
-        2. **Resize Modes:** Choose between Padding (White Bars), Stretching, or just Resizing.
-        3. **Amazon Ready:** Optional AI Background Removal (Requires `rembg`).
-        """)
+        st.markdown("**Features:** Size Control, White Bars/Padding, AI Background Removal.")
         
         c_tool1, c_tool2 = st.columns(2)
         with c_tool1:
@@ -435,10 +445,9 @@ else:
                 "Resize Only (No Padding)", 
                 "Stretch to Target (Distort)"
             ])
-            
-            remove_bg = st.checkbox("Remove Background (AI)", help="Required for Amazon Main Image. Slow on first run.")
+            remove_bg = st.checkbox("Remove Background (AI)", help="Required for Amazon Main Image.")
             if remove_bg and not REMBG_AVAILABLE:
-                st.error("❌ 'rembg' library not installed. Add it to requirements.txt")
+                st.error("❌ 'rembg' library not installed. Add 'rembg' and 'onnxruntime' to requirements.txt")
 
         tool_files = st.file_uploader("Upload Images", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True)
         
@@ -449,19 +458,15 @@ else:
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for i, f in enumerate(tool_files):
                     processed, err = process_image_advanced(f, target_w, target_h, resize_mode, remove_bg)
-                    
                     if processed:
                         img_byte_arr = BytesIO()
-                        # Always save as JPEG with white background logic applied
                         processed.save(img_byte_arr, format='JPEG', quality=95)
                         fname = f.name.rsplit('.', 1)[0] + "_processed.jpg"
                         zf.writestr(fname, img_byte_arr.getvalue())
-                    else:
-                        st.warning(f"Failed {f.name}: {err}")
-                        
+                    else: st.warning(f"Failed {f.name}: {err}")
                     prog_bar.progress((i+1)/len(tool_files))
             
-            st.success(f"Processed {len(tool_files)} images!")
+            st.success("Complete!")
             st.download_button("⬇️ Download ZIP", zip_buffer.getvalue(), file_name="Processed_Images.zip", mime="application/zip")
 
     # --- ADMIN TABS ---
@@ -487,4 +492,3 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
