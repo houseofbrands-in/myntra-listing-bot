@@ -212,7 +212,7 @@ st.sidebar.write(f"Found {len(mp_cats)} categories for {selected_mp}")
 
 tab1, tab2, tab3, tab4 = st.tabs(["🛠️ Rules & Setup", "📈 SEO Keywords", "🚀 Run Generator", "🗑️ Manage"])
 
-# ---------------- TAB 1: SETUP ----------------
+# ---------------- TAB 1: SETUP (Updated with Logic Validator) ----------------
 with tab1:
     st.header(f"Step 1: Setup {selected_mp} Rules")
     
@@ -240,30 +240,85 @@ with tab1:
         cat_name = st.text_input(f"New {selected_mp} Category Name")
 
     c1, c2 = st.columns(2)
-    template_file = c1.file_uploader("Upload Template (.xlsx)", type=["xlsx"])
-    master_file = c2.file_uploader("Upload Master Data (.xlsx)", type=["xlsx"])
+    template_file = c1.file_uploader("1. Upload Template (.xlsx)", type=["xlsx"])
+    master_file = c2.file_uploader("2. Upload Master Data (.xlsx)", type=["xlsx"])
 
     if template_file: headers = pd.read_excel(template_file).columns.tolist()
     if master_file: master_options = parse_master_data(master_file)
 
     if headers:
         st.divider()
+        st.subheader("Map Your Columns")
         if not default_mapping:
-            for h in headers: default_mapping.append({"Column Name": h, "Source": "Leave Blank", "Fixed Value (If Fixed)": ""})
+            for h in headers: 
+                # Smart Auto-Mapping
+                src = "Leave Blank"
+                if "image" in h.lower() or "sku" in h.lower(): src = "Input Excel"
+                elif h in master_options: src = "AI Generation" # Auto-detect strict
+                elif "name" in h.lower() or "description" in h.lower(): src = "AI Generation" # Auto-detect creative
+                
+                default_mapping.append({"Column Name": h, "Source": src, "Fixed Value (If Fixed)": ""})
 
-        edited_df = st.data_editor(pd.DataFrame(default_mapping), column_config={"Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"])}, hide_index=True, use_container_width=True)
+        edited_df = st.data_editor(
+            pd.DataFrame(default_mapping), 
+            column_config={
+                "Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"], required=True)
+            }, 
+            hide_index=True, 
+            use_container_width=True,
+            height=400
+        )
         
-        if st.button("Save Configuration"):
-            final_map = {}
-            for i, row in edited_df.iterrows():
-                src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
-                final_map[row['Column Name']] = {"source": src_code, "value": row['Fixed Value (If Fixed)']}
-            
-            payload = {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}
-            
-            if save_config(selected_mp, cat_name, payload):
-                st.success(f"✅ Saved {cat_name} for {selected_mp}!"); time.sleep(1); st.rerun()
+        # --- NEW: LOGIC VALIDATOR ---
+        st.divider()
+        st.subheader("🕵️ AI Logic Preview")
+        
+        strict_cols = []
+        creative_cols = []
+        
+        for index, row in edited_df.iterrows():
+            if row['Source'] == "AI Generation":
+                col_name = row['Column Name']
+                # Check if this column exists in the uploaded Master Data (Fuzzy match)
+                found_in_master = False
+                for m_col in master_options:
+                    if m_col.lower() in col_name.lower() or col_name.lower() in m_col.lower():
+                        found_in_master = True
+                        break
+                
+                if found_in_master:
+                    strict_cols.append(col_name)
+                else:
+                    creative_cols.append(col_name)
+        
+        c_val1, c_val2 = st.columns(2)
+        with c_val1:
+            if strict_cols:
+                st.success(f"🔒 **Strict Mode (Dropdowns):**\n\nThe AI will choose strictly from your Master Data for:\n\n" + ", ".join([f"`{c}`" for c in strict_cols]))
+            else:
+                st.info("No Strict Columns detected.")
+                
+        with c_val2:
+            if creative_cols:
+                st.warning(f"✨ **Creative Mode (Writing):**\n\nThe AI will generate creative text/SEO for:\n\n" + ", ".join([f"`{c}`" for c in creative_cols]))
+            else:
+                st.info("No Creative Columns detected.")
+        # -----------------------------
 
+        st.divider()
+        if st.button("Save Configuration"):
+            if not cat_name:
+                st.error("Please enter a Category Name.")
+            else:
+                final_map = {}
+                for i, row in edited_df.iterrows():
+                    src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
+                    final_map[row['Column Name']] = {"source": src_code, "value": row['Fixed Value (If Fixed)']}
+                
+                payload = {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}
+                
+                if save_config(selected_mp, cat_name, payload):
+                    st.success(f"✅ Saved {cat_name} for {selected_mp}!"); time.sleep(1); st.rerun()
 # ---------------- TAB 2: SEO ----------------
 with tab2:
     st.header(f"Step 2: {selected_mp} Keywords")
@@ -366,3 +421,4 @@ with tab4:
     if to_del and st.button("Delete"):
         delete_config(selected_mp, to_del)
         st.success("Deleted"); time.sleep(1); st.rerun()
+
