@@ -1,7 +1,8 @@
 streamlit
 pandas
-openpyxl
 openai
-requests
 gspread
 oauth2client
+requests
+XlsxWriter
+openpyxl
