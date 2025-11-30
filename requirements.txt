@@ -3,7 +3,7 @@ pandas
 openai
 gspread
 oauth2client
+xlsxwriter
 requests
-XlsxWriter
-openpyxl
+Pillow
 rembg
