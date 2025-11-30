@@ -8,102 +8,116 @@ import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-st.set_page_config(page_title="Myntra Agency OS (Cloud)", layout="wide")
+st.set_page_config(page_title="Agency OS (Multi-Marketplace)", layout="wide")
 
 # --- AUTHENTICATION ---
 try:
-    # 1. OpenAI Key
     api_key = st.secrets["OPENAI_API_KEY"]
     client = OpenAI(api_key=api_key)
 
-    # 2. Google Sheets Connection
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     gc = gspread.authorize(creds)
     
-    # CONNECT TO SHEETS
     SHEET_NAME = "Agency_OS_Database"
     try:
         sh = gc.open(SHEET_NAME)
         ws_configs = sh.worksheet("Configs")
-        # Try to open SEO sheet, if not exist, warn user
-        try:
-            ws_seo = sh.worksheet("SEO_Data")
-        except:
-            st.error("⚠️ Missing Worksheet: Please create a new tab named 'SEO_Data' in your Google Sheet.")
-            st.stop()
+        ws_seo = sh.worksheet("SEO_Data")
     except Exception as e:
-        st.error(f"❌ Spreadsheet Error: {str(e)}")
+        st.error(f"❌ Database Error: {str(e)}")
         st.stop()
     
 except Exception as e:
     st.error(f"❌ Connection Error: {str(e)}")
     st.stop()
 
-# ================= DATABASE FUNCTIONS =================
+# ================= DATABASE FUNCTIONS (UPDATED FOR MARKETPLACE) =================
 
-def get_all_categories():
+def get_categories_for_marketplace(marketplace):
     try:
-        cats = ws_configs.col_values(1)[1:] 
-        return [c for c in cats if c] 
+        # Get all rows
+        rows = ws_configs.get_all_values()
+        # Skip header if exists, but we'll just filter
+        # Col A = Marketplace, Col B = Category
+        cats = [row[1] for row in rows if len(row) > 1 and row[0] == marketplace]
+        # Remove duplicates and empty
+        return list(set([c for c in cats if c and c != "Category"]))
     except:
         return []
 
-# --- Config Handling ---
-def save_config_to_sheet(name, data):
+def save_config(marketplace, category, data):
     try:
         json_str = json.dumps(data)
-        cell = None
-        try: cell = ws_configs.find(name)
-        except: pass
-        if cell: ws_configs.update_cell(cell.row, 2, json_str)
-        else: ws_configs.append_row([name, json_str])
+        rows = ws_configs.get_all_values()
+        
+        # Look for existing row to update
+        cell_row = None
+        for i, row in enumerate(rows):
+            if len(row) > 1 and row[0] == marketplace and row[1] == category:
+                cell_row = i + 1 # 1-based index
+                break
+        
+        if cell_row:
+            # Update Column C (Index 3)
+            ws_configs.update_cell(cell_row, 3, json_str)
+        else:
+            # Append new row: [Marketplace, Category, JSON]
+            ws_configs.append_row([marketplace, category, json_str])
+        return True
+    except Exception as e:
+        st.error(f"Save Failed: {e}")
+        return False
+
+def load_config(marketplace, category):
+    try:
+        rows = ws_configs.get_all_values()
+        for row in rows:
+            if len(row) > 2 and row[0] == marketplace and row[1] == category:
+                return json.loads(row[2])
+        return None
+    except:
+        return None
+
+def delete_config(marketplace, category):
+    try:
+        rows = ws_configs.get_all_values()
+        for i, row in enumerate(rows):
+            if len(row) > 1 and row[0] == marketplace and row[1] == category:
+                ws_configs.delete_rows(i + 1)
+                return True
+        return False
+    except:
+        return False
+
+# --- SEO Functions (Updated) ---
+def save_seo(marketplace, category, keywords_list):
+    try:
+        kw_string = ", ".join([str(k).strip() for k in keywords_list if str(k).strip()])
+        rows = ws_seo.get_all_values()
+        
+        cell_row = None
+        for i, row in enumerate(rows):
+            if len(row) > 1 and row[0] == marketplace and row[1] == category:
+                cell_row = i + 1
+                break
+        
+        if cell_row:
+            ws_seo.update_cell(cell_row, 3, kw_string)
+        else:
+            ws_seo.append_row([marketplace, category, kw_string])
         return True
     except Exception as e: return False
 
-def load_config_from_sheet(name):
+def get_seo(marketplace, category):
     try:
-        cell = ws_configs.find(name)
-        json_str = ws_configs.cell(cell.row, 2).value
-        return json.loads(json_str)
-    except: return None
-
-def delete_config_from_sheet(name):
-    try:
-        cell = ws_configs.find(name)
-        ws_configs.delete_rows(cell.row)
-        return True
-    except: return False
-
-# --- SEO/Keyword Handling (New) ---
-def save_keywords_to_sheet(category, keywords_list):
-    try:
-        # Join list into a single string for storage
-        kw_string = ", ".join([str(k).strip() for k in keywords_list if str(k).strip()])
-        
-        cell = None
-        try: cell = ws_seo.find(category)
-        except: pass
-        
-        if cell:
-            # Update existing
-            ws_seo.update_cell(cell.row, 2, kw_string)
-        else:
-            # Create new
-            ws_seo.append_row([category, kw_string])
-        return True
-    except Exception as e:
-        st.error(f"SEO Save Error: {e}")
-        return False
-
-def get_keywords_for_category(category):
-    try:
-        cell = ws_seo.find(category)
-        # Return string
-        return ws_seo.cell(cell.row, 2).value
-    except:
-        return "" # No keywords found
+        rows = ws_seo.get_all_values()
+        for row in rows:
+            if len(row) > 2 and row[0] == marketplace and row[1] == category:
+                return row[2]
+        return ""
+    except: return ""
 
 # ================= HELPER FUNCTIONS =================
 def parse_master_data(file):
@@ -125,12 +139,11 @@ def encode_image_from_url(url):
     except Exception as e:
         return None, str(e)
 
-# ================= CORE AI LOGIC (UPDATED WITH KEYWORDS) =================
-def analyze_image_configured(client, image_url, user_hints, keywords, config):
+# ================= CORE AI LOGIC =================
+def analyze_image_configured(client, image_url, user_hints, keywords, config, marketplace):
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # 1. Prepare Valid Options (Strict Mode)
     relevant_options = {}
     ai_target_headers = []
     for col, settings in config['column_mapping'].items():
@@ -141,39 +154,30 @@ def analyze_image_configured(client, image_url, user_hints, keywords, config):
                     relevant_options[col] = opts
                     break
 
-    # 2. Inject Keywords into Prompt
     seo_instruction = ""
     if keywords:
-        seo_instruction = f"""
-        CRITICAL SEO INSTRUCTIONS:
-        The user has provided specific high-performing keywords. 
-        You MUST integrate the following terms naturally into the 'Product Name', 'Description', and 'Tags':
-        KEYWORDS TO USE: {keywords}
-        """
+        seo_instruction = f"MANDATORY KEYWORDS TO USE: {keywords}"
 
     prompt = f"""
-    You are a Myntra/Flipkart Cataloging Expert.
+    You are a Cataloging Expert for {marketplace}.
     CATEGORY: {config['category_name']}
-    USER HINTS: {user_hints}
+    USER CONTEXT: {user_hints}
     
-    TASK: Analyze the image and fill these attributes: {ai_target_headers}
+    TASK: Fill these attributes: {ai_target_headers}
     
     {seo_instruction}
 
     ---------------------------------------------------------
-    SECTION 1: TECHNICAL ATTRIBUTES (Strict Dropdown Choice)
-    ---------------------------------------------------------
-    For technical fields (Fabric, Color, Neck, etc.), choose ONLY from here:
+    STRICT DROPDOWN VALUES (Must Match Exactly):
     {json.dumps(relevant_options, indent=2)}
 
     ---------------------------------------------------------
-    SECTION 2: CREATIVE CONTENT (High Discovery)
-    ---------------------------------------------------------
-    1. Product Name: Formula -> [Brand] [Gender] [Color] [Pattern] [Material] [Category]. Include top keywords.
-    2. Style Note: Suggest where to wear (Occasion) and what to pair with.
-    3. Keywords/Tags: Output a comma-separated list. PRIORITIZE the "KEYWORDS TO USE" list provided above.
+    CREATIVE RULES FOR {marketplace.upper()}:
+    1. Title: Standard {marketplace} formula (Brand + Attributes).
+    2. Description: engaging, bullet points if possible.
+    3. Keywords: High traffic search terms.
 
-    RETURN ONLY THE RAW JSON OBJECT.
+    RETURN ONLY RAW JSON.
     """
 
     try:
@@ -191,36 +195,49 @@ def analyze_image_configured(client, image_url, user_hints, keywords, config):
         return None, str(e)
 
 # ================= APP UI =================
-st.sidebar.title("☁️ Google Sheet DB")
-saved_cats = get_all_categories()
-if st.sidebar.button("🔄 Refresh"): st.rerun()
 
-tab1, tab2, tab3, tab4 = st.tabs(["🛠️ 1. Config Rules", "📈 2. SEO Keywords", "🚀 3. Run Generator", "🗑️ 4. Manage"])
+# --- SIDEBAR: GLOBAL MARKETPLACE SELECTOR ---
+st.sidebar.title("🌍 Agency OS")
+st.sidebar.caption("Project M - Version 9.0")
+selected_mp = st.sidebar.selectbox("Select Marketplace", ["Myntra", "Flipkart", "Ajio", "Amazon", "Nykaa"])
+st.sidebar.divider()
 
-# ---------------- TAB 1: CONFIG SETUP ----------------
+if st.sidebar.button("🔄 Refresh Data"):
+    st.rerun()
+
+# Get categories for THIS marketplace only
+mp_cats = get_categories_for_marketplace(selected_mp)
+st.sidebar.write(f"Found {len(mp_cats)} categories for {selected_mp}")
+
+
+tab1, tab2, tab3, tab4 = st.tabs(["🛠️ Rules & Setup", "📈 SEO Keywords", "🚀 Run Generator", "🗑️ Manage"])
+
+# ---------------- TAB 1: SETUP ----------------
 with tab1:
-    st.header("Step 1: Define Category Rules")
-    mode = st.radio("Mode", ["Create New", "Edit Existing"], horizontal=True)
+    st.header(f"Step 1: Setup {selected_mp} Rules")
     
+    mode = st.radio("Mode", ["Create New", "Edit Existing"], horizontal=True)
     cat_name = ""
     headers = []
     master_options = {}
     default_mapping = []
 
     if mode == "Edit Existing":
-        if saved_cats:
-            edit_cat = st.selectbox("Select Category to Edit", saved_cats)
+        if mp_cats:
+            edit_cat = st.selectbox(f"Select {selected_mp} Category", mp_cats)
             if edit_cat:
-                loaded_data = load_config_from_sheet(edit_cat)
-                if loaded_data:
-                    cat_name = loaded_data['category_name']
-                    headers = loaded_data['headers']
-                    master_options = loaded_data['master_data']
-                    for col, rule in loaded_data['column_mapping'].items():
+                loaded = load_config(selected_mp, edit_cat)
+                if loaded:
+                    cat_name = loaded['category_name']
+                    headers = loaded['headers']
+                    master_options = loaded['master_data']
+                    for col, rule in loaded['column_mapping'].items():
                         src_map = {"AI": "AI Generation", "INPUT": "Input Excel", "FIXED": "Fixed Value", "BLANK": "Leave Blank"}
                         default_mapping.append({"Column Name": col, "Source": src_map.get(rule['source'], "Leave Blank"), "Fixed Value (If Fixed)": rule['value']})
+        else:
+            st.warning(f"No {selected_mp} categories yet.")
     else:
-        cat_name = st.text_input("New Category Name (e.g. Women Sarees)")
+        cat_name = st.text_input(f"New {selected_mp} Category Name")
 
     c1, c2 = st.columns(2)
     template_file = c1.file_uploader("Upload Template (.xlsx)", type=["xlsx"])
@@ -231,98 +248,88 @@ with tab1:
 
     if headers:
         st.divider()
-        st.write("Map Columns:")
         if not default_mapping:
-            for h in headers:
-                default_mapping.append({"Column Name": h, "Source": "Leave Blank", "Fixed Value (If Fixed)": ""})
+            for h in headers: default_mapping.append({"Column Name": h, "Source": "Leave Blank", "Fixed Value (If Fixed)": ""})
 
         edited_df = st.data_editor(pd.DataFrame(default_mapping), column_config={"Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"])}, hide_index=True, use_container_width=True)
         
-        if st.button("Save Config Rules"):
-            final_mapping = {}
-            for index, row in edited_df.iterrows():
+        if st.button("Save Configuration"):
+            final_map = {}
+            for i, row in edited_df.iterrows():
                 src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
-                final_mapping[row['Column Name']] = {"source": src_code, "value": row['Fixed Value (If Fixed)']}
+                final_map[row['Column Name']] = {"source": src_code, "value": row['Fixed Value (If Fixed)']}
             
-            if save_config_to_sheet(cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_mapping}):
-                st.success(f"✅ Rules for '{cat_name}' saved!"); time.sleep(1); st.rerun()
+            payload = {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}
+            
+            if save_config(selected_mp, cat_name, payload):
+                st.success(f"✅ Saved {cat_name} for {selected_mp}!"); time.sleep(1); st.rerun()
 
-# ---------------- TAB 2: SEO KEYWORDS (NEW) ----------------
+# ---------------- TAB 2: SEO ----------------
 with tab2:
-    st.header("Step 2: Upload Keywords (Ads Report)")
-    st.info("Upload your latest High-Performing Keywords here. The AI will prioritize these.")
+    st.header(f"Step 2: {selected_mp} Keywords")
     
-    if not saved_cats:
-        st.warning("Create a category in Tab 1 first.")
+    if not mp_cats:
+        st.warning("Create a category first.")
     else:
-        seo_cat = st.selectbox("Select Category for Keywords", saved_cats, key="seo_cat")
+        seo_cat = st.selectbox("Select Category", mp_cats, key="seo_cat")
+        curr_kw = get_seo(selected_mp, seo_cat)
         
-        # Display current keywords
-        current_kw = get_keywords_for_category(seo_cat)
-        if current_kw:
-            st.caption("✅ Current Active Keywords in Database:")
-            st.info(current_kw[:300] + "..." if len(current_kw) > 300 else current_kw)
+        if curr_kw:
+            st.info(f"Active Keywords: {curr_kw[:100]}...")
         else:
-            st.warning("No keywords uploaded yet.")
+            st.warning("No keywords set.")
 
-        kw_file = st.file_uploader("Upload Keywords File (.xlsx / .csv)", type=["xlsx", "csv"])
-        
+        kw_file = st.file_uploader("Upload Keywords File (Column A)", type=["xlsx", "csv"])
         if kw_file and st.button("Update Keywords"):
             try:
-                if kw_file.name.endswith('.csv'): df_kw = pd.read_csv(kw_file)
-                else: df_kw = pd.read_excel(kw_file)
-                
-                # Assume first column contains the keywords
+                df_kw = pd.read_csv(kw_file) if kw_file.name.endswith('.csv') else pd.read_excel(kw_file)
                 kw_list = df_kw.iloc[:, 0].dropna().astype(str).tolist()
-                
-                if save_keywords_to_sheet(seo_cat, kw_list):
-                    st.success(f"✅ Updated {len(kw_list)} keywords for {seo_cat}!")
-                    time.sleep(1); st.rerun()
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
+                if save_seo(selected_mp, seo_cat, kw_list):
+                    st.success("Updated!"); time.sleep(1); st.rerun()
+            except Exception as e: st.error(str(e))
 
 # ---------------- TAB 3: RUNNER ----------------
 with tab3:
-    st.header("Step 3: Generate Listings")
+    st.header(f"Step 3: Generate {selected_mp} Listings")
     
-    if not saved_cats: st.warning("No configs found."); st.stop()
+    if not mp_cats: st.warning("No categories found."); st.stop()
     
-    run_cat = st.selectbox("Select Category", saved_cats, key="run_cat")
+    run_cat = st.selectbox("Select Category", mp_cats, key="run_cat")
+    active_kws = get_seo(selected_mp, run_cat)
     
-    # Check status
-    config = load_config_from_sheet(run_cat)
-    active_kws = get_keywords_for_category(run_cat)
+    if active_kws: st.caption("✨ Optimizing with custom keywords")
+    else: st.caption("⚠️ Using generic AI SEO")
     
-    if active_kws: st.caption(f"✨ Using Custom Keywords for optimization")
-    else: st.caption("⚠️ No custom keywords found. Using generic AI SEO.")
-
-    input_data_file = st.file_uploader("Upload Input Data (.xlsx)", type=["xlsx"], key="run_input")
+    input_file = st.file_uploader("Upload Input Data (.xlsx)", type=["xlsx"], key="run_in")
     
-    if input_data_file and st.button("▶️ Start Processing"):
-        df_input = pd.read_excel(input_data_file)
-        if "Front Image" not in df_input.columns: st.error("Missing 'Front Image' column"); st.stop()
-            
-        progress_bar = st.progress(0); status = st.empty()
+    if input_file and st.button("▶️ Generate Catalog"):
+        config = load_config(selected_mp, run_cat)
+        df_input = pd.read_excel(input_file)
+        
+        # Flexible image column search
+        img_col = next((c for c in df_input.columns if "front" in c.lower() or "image" in c.lower() or "url" in c.lower()), None)
+        if not img_col: st.error("No 'Image' column found."); st.stop()
+        
+        progress = st.progress(0); status = st.empty()
         final_rows = []
-        image_cache = {}
+        cache = {}
         mapping = config['column_mapping']
         
-        for index, row in df_input.iterrows():
-            sku = row.get('vendorSkuCode', f'Row {index}')
-            status.text(f"Processing: {sku}")
-            progress_bar.progress((index + 1) / len(df_input))
+        for idx, row in df_input.iterrows():
+            status.text(f"Processing Row {idx+1}")
+            progress.progress((idx+1)/len(df_input))
             
-            img_link = str(row.get('Front Image', '')).strip()
+            img_url = str(row.get(img_col, "")).strip()
             ai_data = None
-            needs_ai = any(m['source'] == 'AI' for m in mapping.values())
+            needs_ai = any(m['source']=='AI' for m in mapping.values())
             
             if needs_ai:
-                if img_link in image_cache: ai_data = image_cache[img_link]
+                if img_url in cache: ai_data = cache[img_url]
                 else:
-                    hints = f"Color: {row.get('Brand Colour', '')}, Fabric: {row.get('Fabric', '')}"
-                    # Pass the active keywords here
-                    ai_data, _ = analyze_image_configured(client, img_link, hints, active_kws, config)
-                    if ai_data: image_cache[img_link] = ai_data
+                    # Generic hints extraction
+                    hints = ", ".join([f"{k}: {v}" for k,v in row.items() if "color" in k.lower() or "fabric" in k.lower()])
+                    ai_data, _ = analyze_image_configured(client, img_url, hints, active_kws, config, selected_mp)
+                    if ai_data: cache[img_url] = ai_data
             
             new_row = {}
             for col in config['headers']:
@@ -331,30 +338,31 @@ with tab3:
                     val = ""
                     if col in df_input.columns: val = row[col]
                     else:
-                        for inp_col in df_input.columns:
-                            if inp_col.lower() in col.lower(): val = row[inp_col]; break
+                        # Fuzzy match input columns
+                        for ic in df_input.columns:
+                            if ic.lower() in col.lower(): val = row[ic]; break
                     new_row[col] = val
                 elif rule['source'] == 'FIXED': new_row[col] = rule['value']
                 elif rule['source'] == 'AI' and ai_data:
                     found = False
                     if col in ai_data: new_row[col] = ai_data[col]; found = True
                     else:
-                        for k, v in ai_data.items():
+                        for k,v in ai_data.items():
                             if k.lower().replace(" ","") in col.lower().replace(" ",""): new_row[col] = v; found = True; break
                     if not found: new_row[col] = ""
                 else: new_row[col] = ""
             final_rows.append(new_row)
-        
+            
         out_df = pd.DataFrame(final_rows)
-        outfile = f"Result_{run_cat}_{int(time.time())}.xlsx"
-        out_df.to_excel(outfile, index=False)
-        st.success("✅ Done!")
-        with open(outfile, "rb") as f: st.download_button("📥 Download Excel", f, file_name=outfile)
+        fn = f"{selected_mp}_{run_cat}_Generated.xlsx"
+        out_df.to_excel(fn, index=False)
+        st.success("Done!")
+        with open(fn, "rb") as f: st.download_button("Download Excel", f, file_name=fn)
 
 # ---------------- TAB 4: MANAGE ----------------
 with tab4:
-    st.header("Manage Configs")
-    to_del = st.selectbox("Delete Category", [""] + saved_cats)
+    st.header(f"Manage {selected_mp} Configs")
+    to_del = st.selectbox("Delete Category", [""]+mp_cats)
     if to_del and st.button("Delete"):
-        delete_config_from_sheet(to_del)
+        delete_config(selected_mp, to_del)
         st.success("Deleted"); time.sleep(1); st.rerun()
