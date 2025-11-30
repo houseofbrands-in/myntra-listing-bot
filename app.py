@@ -11,13 +11,17 @@ from io import BytesIO
 import zipfile
 from PIL import Image, ImageOps
 
-# --- NEW: Try to import rembg for Background Removal ---
+# --- DEBUG IMPORT BLOCK ---
 try:
     from rembg import remove as remove_bg_ai
     REMBG_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     REMBG_AVAILABLE = False
-
+    # This will print the EXACT error at the top of your app so we can see it
+    st.error(f"⚠️ SYSTEM ERROR: Could not load 'rembg'. Reason: {e}")
+except Exception as e:
+    REMBG_AVAILABLE = False
+    st.error(f"⚠️ SYSTEM ERROR: Unexpected error loading 'rembg'. Reason: {e}")
 st.set_page_config(page_title="HOB OS - Secure", layout="wide")
 
 # ==========================================
@@ -483,3 +487,4 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
