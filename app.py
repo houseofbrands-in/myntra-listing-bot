@@ -14,11 +14,15 @@ from oauth2client.service_account import ServiceAccountCredentials
 st.set_page_config(page_title="Agency OS - Project M", layout="wide")
 st.title("Agency OS: AI Cataloging Automation")
 
-# Initialize OpenAI
-if "openai_key" in st.secrets:
-    client = OpenAI(api_key=st.secrets["openai_key"])
+# ERROR FIX: Check for the key using the name from your screenshot
+# We check both "OPENAI_API_KEY" (what you have) and "openai_key" (what I wrote before)
+api_key = st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_key")
+
+if api_key:
+    client = OpenAI(api_key=api_key)
 else:
-    st.error("OpenAI API Key missing in secrets.toml")
+    st.error("❌ API Key Error: Please make sure your .streamlit/secrets.toml contains:")
+    st.code('OPENAI_API_KEY = "sk-..."', language="toml")
     st.stop()
 
 # Initialize Google Sheets Connection
@@ -26,7 +30,14 @@ def connect_to_gsheets():
     try:
         # Create a dict from the secrets object for credentials
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds_dict = dict(st.secrets["gcp_service_account"])
+        
+        # Check if user put it in [gcp_service_account] section or root
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+        else:
+            # Fallback: maybe they pasted the JSON keys directly at the root
+            creds_dict = dict(st.secrets)
+            
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         
@@ -37,7 +48,6 @@ def connect_to_gsheets():
     except Exception as e:
         st.error(f"Database Connection Error: {e}")
         return None
-
 # ==========================================
 # 2. CORE AI LOGIC (Dual-Mode)
 # ==========================================
@@ -311,3 +321,4 @@ with tab3:
             
             st.warning("To delete configurations, please manually delete rows in your Google Sheet 'Agency_OS_Database'.")
             st.markdown(f"[Open Google Sheet](https://docs.google.com/spreadsheets/d/{ws.spreadsheet.id})")
+
