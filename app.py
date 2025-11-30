@@ -7,6 +7,9 @@ from openai import OpenAI
 import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from io import BytesIO
+import zipfile
+from PIL import Image, ImageOps  # NEW: For Image Processing
 
 st.set_page_config(page_title="HOB OS - Secure", layout="wide")
 
@@ -32,11 +35,10 @@ try:
         sh = gc.open(SHEET_NAME)
         ws_configs = sh.worksheet("Configs")
         ws_seo = sh.worksheet("SEO_Data")
-        # NEW: Users Sheet
         try:
             ws_users = sh.worksheet("Users")
         except:
-            st.error("⚠️ Database Error: Please create a worksheet named 'Users' with cols: Username, Password, Role")
+            st.error("⚠️ Database Error: 'Users' worksheet missing.")
             st.stop()
     except Exception as e:
         st.error(f"❌ Database connection failed: {str(e)}")
@@ -53,40 +55,30 @@ def check_login(username, password):
     try:
         users = ws_users.get_all_records()
         for u in users:
-            # Convert everything to string to be safe
             if str(u['Username']).strip() == username and str(u['Password']).strip() == password:
                 return True, u['Role']
         return False, None
-    except Exception as e:
-        st.error(f"Login Logic Error: {e}")
-        return False, None
+    except: return False, None
 
 def create_user(username, password, role):
     try:
-        # Check if exists
-        cell = ws_users.find(username)
-        if cell: return False, "User already exists"
+        if ws_users.find(username): return False, "User exists"
         ws_users.append_row([username, password, role])
-        return True, "User created"
-    except: return False, "Database error"
+        return True, "Created"
+    except: return False, "DB Error"
 
 def delete_user(username):
     try:
         cell = ws_users.find(username)
-        if cell:
-            ws_users.delete_rows(cell.row)
-            return True
+        if cell: ws_users.delete_rows(cell.row); return True
         return False
     except: return False
 
-def get_all_users():
-    return ws_users.get_all_records()
+def get_all_users(): return ws_users.get_all_records()
 
 # ==========================================
-# 3. CORE LOGIC (V9.2 Functions)
+# 3. CORE LOGIC (UPDATED V10.3)
 # ==========================================
-# ... (Keeping previous logic functions exactly same) ...
-
 def get_categories_for_marketplace(marketplace):
     try:
         rows = ws_configs.get_all_values()
@@ -98,13 +90,10 @@ def save_config(marketplace, category, data):
     try:
         json_str = json.dumps(data)
         rows = ws_configs.get_all_values()
-        cell_row = None
         for i, row in enumerate(rows):
             if len(row) > 1 and row[0] == marketplace and row[1] == category:
-                cell_row = i + 1; break
-        if cell_row: ws_configs.update_cell(cell_row, 3, json_str)
-        else: ws_configs.append_row([marketplace, category, json_str])
-        return True
+                ws_configs.update_cell(i + 1, 3, json_str); return True
+        ws_configs.append_row([marketplace, category, json_str]); return True
     except: return False
 
 def load_config(marketplace, category):
@@ -129,13 +118,10 @@ def save_seo(marketplace, category, keywords_list):
     try:
         kw_string = ", ".join([str(k).strip() for k in keywords_list if str(k).strip()])
         rows = ws_seo.get_all_values()
-        cell_row = None
         for i, row in enumerate(rows):
             if len(row) > 1 and row[0] == marketplace and row[1] == category:
-                cell_row = i + 1; break
-        if cell_row: ws_seo.update_cell(cell_row, 3, kw_string)
-        else: ws_seo.append_row([marketplace, category, kw_string])
-        return True
+                ws_seo.update_cell(i + 1, 3, kw_string); return True
+        ws_seo.append_row([marketplace, category, kw_string]); return True
     except: return False
 
 def get_seo(marketplace, category):
@@ -162,9 +148,34 @@ def encode_image_from_url(url):
             url = url.replace("?dl=0", "").replace("&dl=0", "") + ("&dl=1" if "?" in url else "?dl=1")
         response = requests.get(url, timeout=10)
         return (base64.b64encode(response.content).decode('utf-8'), None) if response.status_code == 200 else (None, "Download Error")
-    except Exception as e:
-        return None, str(e)
+    except Exception as e: return None, str(e)
 
+# --- NEW: IMAGE PROCESSING UTILITY ---
+def process_image_to_square(image_file, size=1000):
+    try:
+        img = Image.open(image_file)
+        if img.mode in ('RGBA', 'LA'):
+            background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
+            background.paste(img, img.split()[-1])
+            img = background
+        img = img.convert("RGB")
+        
+        # Calculate aspect ratio preserving resize
+        img.thumbnail((size, size), Image.Resampling.LANCZOS)
+        
+        # Create white canvas
+        new_img = Image.new("RGB", (size, size), (255, 255, 255))
+        
+        # Paste centered
+        left = (size - img.width) // 2
+        top = (size - img.height) // 2
+        new_img.paste(img, (left, top))
+        
+        return new_img
+    except Exception as e:
+        return None
+
+# --- UPDATED: AMAZON AWARE AI ---
 def analyze_image_configured(client, image_url, user_hints, keywords, config, marketplace):
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
@@ -183,6 +194,18 @@ def analyze_image_configured(client, image_url, user_hints, keywords, config, ma
     seo_instruction = ""
     if keywords: seo_instruction = f"MANDATORY SEO KEYWORDS: {keywords}"
 
+    # --- MARKETPLACE SPECIFIC LOGIC ---
+    mp_instruction = ""
+    if marketplace.lower() == "amazon":
+        mp_instruction = """
+        AMAZON SPECIFIC RULES:
+        1. BULLET POINTS: If output keys contain 'Bullet' or 'Feature', write 5 distinct selling points (Material, Fit, Usage, Care, Design). Start each with a capitalized phrase (e.g., 'PREMIUM COTTON:').
+        2. SEARCH TERMS: If keys contain 'Search Terms', provide 250 bytes of unique keywords, no commas.
+        3. TITLE: Format: [Brand] + [Department] + [Material] + [Style] + [Color] (Max 200 chars).
+        """
+    elif marketplace.lower() == "myntra":
+        mp_instruction = "MYNTRA RULES: Focus on fashion attributes (Neck, Sleeve, Pattern). Title should be short and catchy."
+    
     prompt = f"""
     You are a Cataloging Expert for {marketplace}.
     CATEGORY: {config['category_name']}
@@ -190,13 +213,10 @@ def analyze_image_configured(client, image_url, user_hints, keywords, config, ma
     TASK: Fill these attributes: {ai_target_headers}
     {seo_instruction}
     
+    {mp_instruction}
+    
     STRICT DROPDOWN VALUES (Must Match Exactly):
     {json.dumps(relevant_options, indent=2)}
-    
-    CREATIVE RULES:
-    1. Title: Standard {marketplace} formula.
-    2. Description: Engaging, include keywords.
-    3. Keywords: High traffic search terms.
     
     RETURN RAW JSON.
     """
@@ -217,75 +237,49 @@ def analyze_image_configured(client, image_url, user_hints, keywords, config, ma
 
 
 # ==========================================
-# 4. MAIN APP LOGIC (LOGIN WRAPPER)
+# 4. MAIN APP LOGIC
 # ==========================================
 
 if not st.session_state.logged_in:
-    # --- LOGIN SCREEN ---
     c1, c2, c3 = st.columns([1,2,1])
     with c2:
         st.title("🔒 HOB OS Login")
-        st.write("Please sign in to access the tool.")
-        
         with st.form("login_form"):
             user = st.text_input("Username")
             pwd = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Login")
-            
             if submitted:
                 is_valid, role = check_login(user, pwd)
                 if is_valid:
-                    st.session_state.logged_in = True
-                    st.session_state.username = user
-                    st.session_state.user_role = role
-                    st.success("Login Successful!")
+                    st.session_state.logged_in = True; st.session_state.username = user; st.session_state.user_role = role
                     st.rerun()
-                else:
-                    st.error("Invalid Username or Password")
-
+                else: st.error("Invalid Credentials")
 else:
-    # --- LOGGED IN DASHBOARD ---
-    
-    # Sidebar Profile
     st.sidebar.title("🌍 HOB OS")
     st.sidebar.caption(f"User: {st.session_state.username} ({st.session_state.user_role})")
-    
-    if st.sidebar.button("Log Out"):
-        st.session_state.logged_in = False
-        st.rerun()
-        
+    if st.sidebar.button("Log Out"): st.session_state.logged_in = False; st.rerun()
     st.sidebar.divider()
 
-    # Marketplace Selector
     selected_mp = st.sidebar.selectbox("Marketplace", ["Myntra", "Flipkart", "Ajio", "Amazon", "Nykaa"])
-    st.sidebar.divider()
-    
-    # Refresh Button
     if st.sidebar.button("🔄 Refresh Data"): st.rerun()
 
-    # Get Categories
     mp_cats = get_categories_for_marketplace(selected_mp)
     st.sidebar.write(f"{len(mp_cats)} Categories Found")
     
-    # --- ROLE BASED TABS ---
-    
-    # Define available tabs based on role
+    # --- TAB DEFINITIONS ---
+    # Standard: Setup, SEO, Run, Tools
+    # Admin: + Configs, Admin
+    base_tabs = ["🛠️ Setup", "📈 SEO", "🚀 Run", "🖼️ Tools"]
     if st.session_state.user_role.lower() == "admin":
-        tab_names = ["🛠️ Setup", "📈 SEO", "🚀 Run", "🗑️ Configs", "👥 Admin Console"]
-    else:
-        # Standard User
-        tab_names = ["🛠️ Setup", "📈 SEO", "🚀 Run"]
+        base_tabs += ["🗑️ Configs", "👥 Admin"]
         
-    tabs = st.tabs(tab_names)
+    tabs = st.tabs(base_tabs)
 
     # --- TAB 1: SETUP ---
     with tabs[0]:
         st.header(f"1. Setup {selected_mp} Rules")
         mode = st.radio("Mode", ["Create New", "Edit Existing"], horizontal=True)
-        cat_name = ""
-        headers = []
-        master_options = {}
-        default_mapping = []
+        cat_name = ""; headers = []; master_options = {}; default_mapping = []
 
         if mode == "Edit Existing":
             if mp_cats:
@@ -293,14 +287,11 @@ else:
                 if edit_cat:
                     loaded = load_config(selected_mp, edit_cat)
                     if loaded:
-                        cat_name = loaded['category_name']
-                        headers = loaded['headers']
-                        master_options = loaded['master_data']
+                        cat_name = loaded['category_name']; headers = loaded['headers']; master_options = loaded['master_data']
                         for col, rule in loaded['column_mapping'].items():
                             src_map = {"AI": "AI Generation", "INPUT": "Input Excel", "FIXED": "Fixed Value", "BLANK": "Leave Blank"}
                             default_mapping.append({"Column Name": col, "Source": src_map.get(rule['source'], "Leave Blank"), "Fixed Value (If Fixed)": rule['value']})
-        else:
-            cat_name = st.text_input(f"New {selected_mp} Category Name")
+        else: cat_name = st.text_input(f"New {selected_mp} Category Name")
 
         c1, c2 = st.columns(2)
         template_file = c1.file_uploader("Template (.xlsx)", type=["xlsx"])
@@ -313,63 +304,21 @@ else:
             st.divider()
             if not default_mapping:
                 for h in headers:
-                    src = "Leave Blank"
-                    h_low = h.lower()
+                    src = "Leave Blank"; h_low = h.lower()
                     if "image" in h_low or "sku" in h_low: src = "Input Excel"
                     elif h in master_options or "name" in h_low or "desc" in h_low: src = "AI Generation"
                     default_mapping.append({"Column Name": h, "Source": src, "Fixed Value (If Fixed)": ""})
 
-            edited_df = st.data_editor(
-                pd.DataFrame(default_mapping), 
-                column_config={"Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"])}, 
-                hide_index=True, 
-                use_container_width=True, 
-                height=400
-            )
+            edited_df = st.data_editor(pd.DataFrame(default_mapping), column_config={"Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"])}, hide_index=True, use_container_width=True, height=400)
             
-            # --- LOGIC VALIDATOR (FIXED) ---
-            st.divider()
-            st.subheader("🕵️ AI Logic Validation")
-            
-            strict, creative = [], []
-            for i, row in edited_df.iterrows():
-                if row['Source'] == "AI Generation":
-                    # Check if column exists in master options (Fuzzy Match)
-                    # FIX: Ensure we don't match generic terms like "Name" to "Product Name" incorrectly if "Name" isn't in master
-                    found = False
-                    col_name = row['Column Name']
-                    for m_col in master_options:
-                        if m_col.lower() == col_name.lower(): # Exact match preferred
-                            found = True; break
-                        elif m_col.lower() in col_name.lower() and len(m_col) > 3: # Substring match only if master col is specific length
-                            found = True; break
-                    
-                    if found: strict.append(col_name)
-                    else: creative.append(col_name)
-            
-            c_v1, c_v2 = st.columns(2)
-            with c_v1:
-                st.success(f"🔒 **Strict Mode** ({len(strict)})")
-                with st.expander("View Dropdown Columns"):
-                    st.write(", ".join([f"`{c}`" for c in strict]))
-                    
-            with c_v2:
-                st.warning(f"✨ **Creative Mode** ({len(creative)})")
-                with st.expander("View Content Columns"):
-                    st.write(", ".join([f"`{c}`" for c in creative]))
-            
-            st.caption("ℹ️ *Strict columns force the AI to pick from your Master Data. Creative columns allow the AI to write freely.*")
-            # -------------------------------
-
             if st.button("Save Config"):
                 final_map = {}
                 for i, row in edited_df.iterrows():
                     src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
                     final_map[row['Column Name']] = {"source": src_code, "value": row['Fixed Value (If Fixed)']}
-                
-                payload = {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}
-                if save_config(selected_mp, cat_name, payload):
+                if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
                     st.success("Saved!"); time.sleep(1); st.rerun()
+
     # --- TAB 2: SEO ---
     with tabs[1]:
         st.header(f"2. SEO Keywords")
@@ -384,77 +333,35 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-   # --- TAB 3: RUN ---
+    # --- TAB 3: RUN ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
-        if not mp_cats: 
-            st.warning("No categories configured yet.")
-            st.stop()
+        if not mp_cats: st.warning("No categories configured yet."); st.stop()
         
         run_cat = st.selectbox("Select Category", mp_cats, key="run")
-        
-        # --- NEW FEATURE: DYNAMIC INPUT TEMPLATE ---
         if run_cat:
             config = load_config(selected_mp, run_cat)
             if config:
-                # Identify columns required from Input
-                mapping = config.get('column_mapping', {})
-                required_cols = ["Image URL"] # Mandatory first column
-                
-                for col, rule in mapping.items():
-                    # Check for INPUT source (Config saves it as 'INPUT')
-                    if rule.get('source') == 'INPUT':
-                        required_cols.append(col)
-                
+                required_cols = ["Image URL"] + [col for col, rule in config.get('column_mapping', {}).items() if rule.get('source') == 'INPUT']
                 st.info(f"ℹ️ Required Input Columns: {', '.join(required_cols)}")
-                
-                # Generate empty template dataframe
-                df_template = pd.DataFrame(columns=required_cols)
-                
-                # Convert to Excel in memory
-                from io import BytesIO
                 output = BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_template.to_excel(writer, index=False)
-                processed_data = output.getvalue()
-                
-                st.download_button(
-                    label="📥 Download Input Template for this Category",
-                    data=processed_data,
-                    file_name=f"{selected_mp}_{run_cat}_Input_Template.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    help="Download this empty file, fill in your data, and upload it below."
-                )
-                st.divider()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: pd.DataFrame(columns=required_cols).to_excel(writer, index=False)
+                st.download_button("📥 Download Input Template", output.getvalue(), file_name=f"{selected_mp}_{run_cat}_Template.xlsx")
 
-        # --- EXISTING UPLOAD LOGIC ---
         active_kws = get_seo(selected_mp, run_cat)
         input_file = st.file_uploader("Upload Input Data (filled template)", type=["xlsx"], key="run_in")
         
         if input_file:
             df_input = pd.read_excel(input_file)
             row_count = len(df_input)
-            
-            est_cost_usd = row_count * 0.02
-            
-            c_cost1, c_cost2 = st.columns(2)
-            c_cost1.metric("📦 Items", f"{row_count} SKUs")
-            c_cost2.metric("💲 Est. Cost", f"${est_cost_usd:.2f}")
+            st.metric("📦 SKUs to Process", row_count)
             
             if st.button("▶️ Start Generation"):
-                # config is already loaded above
-                
-                # Smart Column Detection for Images
                 img_col = next((c for c in df_input.columns if "front" in c.lower() or "image" in c.lower() or "url" in c.lower()), None)
-                if not img_col: 
-                    st.error("❌ Error: No 'Image URL' column found in uploaded file.")
-                    st.stop()
+                if not img_col: st.error("❌ No 'Image URL' column found."); st.stop()
                 
-                progress = st.progress(0)
-                status = st.empty()
-                final_rows = []
-                cache = {}
-                mapping = config['column_mapping']
+                progress = st.progress(0); status = st.empty()
+                final_rows = []; cache = {}; mapping = config['column_mapping']
                 
                 for idx, row in df_input.iterrows():
                     status.text(f"Processing {idx+1}/{row_count}")
@@ -465,108 +372,85 @@ else:
                     needs_ai = any(m['source']=='AI' for m in mapping.values())
                     
                     if needs_ai:
-                        if img_url in cache: 
-                            ai_data = cache[img_url]
+                        if img_url in cache: ai_data = cache[img_url]
                         else:
-                            # Context hints from input columns
-                            hints = ", ".join([f"{k}: {v}" for k,v in row.items() if str(v) != "nan"])
+                            hints = ", ".join([f"{k}: {v}" for k,v in row.items() if str(v) != "nan" and k != img_col])
                             ai_data, _ = analyze_image_configured(client, img_url, hints, active_kws, config, selected_mp)
                             if ai_data: cache[img_url] = ai_data
                     
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
-                        
                         if rule['source'] == 'INPUT':
-                            # Exact match first, then fuzzy
                             val = ""
-                            if col in df_input.columns: 
-                                val = row[col]
+                            if col in df_input.columns: val = row[col]
                             else:
-                                # Fallback search
                                 for ic in df_input.columns:
-                                    if ic.lower() in col.lower(): 
-                                        val = row[ic]
-                                        break
+                                    if ic.lower() in col.lower(): val = row[ic]; break
                             new_row[col] = val
-                            
-                        elif rule['source'] == 'FIXED': 
-                            new_row[col] = rule['value']
-                            
+                        elif rule['source'] == 'FIXED': new_row[col] = rule['value']
                         elif rule['source'] == 'AI' and ai_data:
                             found = False
-                            # Try exact key match
-                            if col in ai_data: 
-                                new_row[col] = ai_data[col]
-                                found = True
+                            if col in ai_data: new_row[col] = ai_data[col]; found = True
                             else:
-                                # Try fuzzy key match from AI JSON
                                 for k,v in ai_data.items():
-                                    if k.lower().replace(" ","") in col.lower().replace(" ",""): 
-                                        new_row[col] = v
-                                        found = True
-                                        break
+                                    if k.lower().replace(" ","") in col.lower().replace(" ",""): new_row[col] = v; found = True; break
                             if not found: new_row[col] = ""
-                        else: 
-                            new_row[col] = ""
-                            
+                        else: new_row[col] = ""
                     final_rows.append(new_row)
-                    
-                out_df = pd.DataFrame(final_rows)
-                fn = f"{selected_mp}_{run_cat}_Generated.xlsx"
                 
-                # Buffer for download
                 output_gen = BytesIO()
-                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer:
-                    out_df.to_excel(writer, index=False)
-                processed_gen = output_gen.getvalue()
+                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: pd.DataFrame(final_rows).to_excel(writer, index=False)
+                st.success("✅ Done!")
+                st.download_button("⬇️ Download Catalog", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
 
-                st.success("✅ Generation Complete!")
-                st.download_button("⬇️ Download Catalog", processed_gen, file_name=fn)
-                
-    # --- ADMIN ONLY TABS ---
-    if st.session_state.user_role.lower() == "admin":
+    # --- TAB 4: TOOLS (NEW V10.3) ---
+    with tabs[3]:
+        st.header("🖼️ Bulk Image Resizer")
+        st.caption("Convert images to Marketplace Standards (Square, White Background, 1000px).")
         
-        # Tab 4: Manage Configs
-        with tabs[3]:
+        tool_files = st.file_uploader("Upload Images", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True)
+        target_size = st.number_input("Target Size (px)", value=1000, min_value=500, max_value=3000)
+        
+        if tool_files and st.button("Process Images"):
+            zip_buffer = BytesIO()
+            prog_bar = st.progress(0)
+            
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                for i, f in enumerate(tool_files):
+                    processed = process_image_to_square(f, target_size)
+                    if processed:
+                        # Save to memory buffer
+                        img_byte_arr = BytesIO()
+                        processed.save(img_byte_arr, format='JPEG', quality=90)
+                        # Add to zip
+                        fname = f.name.rsplit('.', 1)[0] + "_processed.jpg"
+                        zf.writestr(fname, img_byte_arr.getvalue())
+                    prog_bar.progress((i+1)/len(tool_files))
+            
+            st.success(f"Processed {len(tool_files)} images!")
+            st.download_button("⬇️ Download ZIP", zip_buffer.getvalue(), file_name="Marketplace_Images.zip", mime="application/zip")
+
+    # --- ADMIN TABS ---
+    if st.session_state.user_role.lower() == "admin":
+        with tabs[4]:
             st.header("Manage Configs")
             to_del = st.selectbox("Delete", [""]+mp_cats)
             if to_del and st.button("Delete Config"):
-                delete_config(selected_mp, to_del)
-                st.success("Deleted"); time.sleep(1); st.rerun()
+                delete_config(selected_mp, to_del); st.success("Deleted"); time.sleep(1); st.rerun()
 
-        # Tab 5: Admin Console (User Management)
-        with tabs[4]:
-            st.header("👥 Admin Console: User Management")
-            
-            # View Users
-            all_users = get_all_users()
-            if all_users:
-                st.dataframe(pd.DataFrame(all_users))
-            
-            st.divider()
-            
-            # Create User
+        with tabs[5]:
+            st.header("👥 Admin Console")
+            st.dataframe(pd.DataFrame(get_all_users()))
             c_add1, c_add2 = st.columns(2)
             with c_add1:
-                st.subheader("Add New User")
                 with st.form("add_user"):
-                    new_u = st.text_input("Username")
-                    new_p = st.text_input("Password")
-                    new_r = st.selectbox("Role", ["user", "admin"])
-                    if st.form_submit_button("Create User"):
+                    new_u = st.text_input("Username"); new_p = st.text_input("Password"); new_r = st.selectbox("Role", ["user", "admin"])
+                    if st.form_submit_button("Create"):
                         ok, msg = create_user(new_u, new_p, new_r)
                         if ok: st.success(msg); time.sleep(1); st.rerun()
                         else: st.error(msg)
-            
-            # Delete User
             with c_add2:
-                st.subheader("Remove User")
-                u_to_del = st.selectbox("Select User to Remove", [u['Username'] for u in all_users if str(u['Username']) != "admin"])
-                if st.button("Delete User"):
-                    if delete_user(u_to_del):
-                        st.success(f"Removed {u_to_del}"); time.sleep(1); st.rerun()
-                    else: st.error("Failed")
-
-
-
+                u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
+                if st.button("Delete"):
+                    if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
