@@ -8,7 +8,7 @@ import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-st.set_page_config(page_title="Agency OS - Secure", layout="wide")
+st.set_page_config(page_title="HOB OS - Secure", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -224,7 +224,7 @@ if not st.session_state.logged_in:
     # --- LOGIN SCREEN ---
     c1, c2, c3 = st.columns([1,2,1])
     with c2:
-        st.title("🔒 Agency OS Login")
+        st.title("🔒 HOB OS Login")
         st.write("Please sign in to access the tool.")
         
         with st.form("login_form"):
@@ -247,7 +247,7 @@ else:
     # --- LOGGED IN DASHBOARD ---
     
     # Sidebar Profile
-    st.sidebar.title("🌍 Agency OS")
+    st.sidebar.title("🌍 HOB OS")
     st.sidebar.caption(f"User: {st.session_state.username} ({st.session_state.user_role})")
     
     if st.sidebar.button("Log Out"):
@@ -499,4 +499,5 @@ else:
                     if delete_user(u_to_del):
                         st.success(f"Removed {u_to_del}"); time.sleep(1); st.rerun()
                     else: st.error("Failed")
+
 
