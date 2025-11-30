@@ -319,21 +319,48 @@ else:
                     elif h in master_options or "name" in h_low or "desc" in h_low: src = "AI Generation"
                     default_mapping.append({"Column Name": h, "Source": src, "Fixed Value (If Fixed)": ""})
 
-            edited_df = st.data_editor(pd.DataFrame(default_mapping), column_config={"Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"])}, hide_index=True, use_container_width=True, height=400)
+            edited_df = st.data_editor(
+                pd.DataFrame(default_mapping), 
+                column_config={"Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"])}, 
+                hide_index=True, 
+                use_container_width=True, 
+                height=400
+            )
             
-            # Logic Validator
+            # --- LOGIC VALIDATOR (FIXED) ---
             st.divider()
+            st.subheader("🕵️ AI Logic Validation")
+            
             strict, creative = [], []
             for i, row in edited_df.iterrows():
                 if row['Source'] == "AI Generation":
-                    found = any(m.lower() in row['Column Name'].lower() for m in master_options)
-                    if found: strict.append(row['Column Name'])
-                    else: creative.append(row['Column Name'])
+                    # Check if column exists in master options (Fuzzy Match)
+                    # FIX: Ensure we don't match generic terms like "Name" to "Product Name" incorrectly if "Name" isn't in master
+                    found = False
+                    col_name = row['Column Name']
+                    for m_col in master_options:
+                        if m_col.lower() == col_name.lower(): # Exact match preferred
+                            found = True; break
+                        elif m_col.lower() in col_name.lower() and len(m_col) > 3: # Substring match only if master col is specific length
+                            found = True; break
+                    
+                    if found: strict.append(col_name)
+                    else: creative.append(col_name)
             
             c_v1, c_v2 = st.columns(2)
-            if strict: c_v1.success(f"🔒 Strict Mode: {len(strict)} columns")
-            if creative: c_v2.warning(f"✨ Creative Mode: {len(creative)} columns")
+            with c_v1:
+                st.success(f"🔒 **Strict Mode** ({len(strict)})")
+                with st.expander("View Dropdown Columns"):
+                    st.write(", ".join([f"`{c}`" for c in strict]))
+                    
+            with c_v2:
+                st.warning(f"✨ **Creative Mode** ({len(creative)})")
+                with st.expander("View Content Columns"):
+                    st.write(", ".join([f"`{c}`" for c in creative]))
             
+            st.caption("ℹ️ *Strict columns force the AI to pick from your Master Data. Creative columns allow the AI to write freely.*")
+            # -------------------------------
+
             if st.button("Save Config"):
                 final_map = {}
                 for i, row in edited_df.iterrows():
@@ -343,7 +370,6 @@ else:
                 payload = {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}
                 if save_config(selected_mp, cat_name, payload):
                     st.success("Saved!"); time.sleep(1); st.rerun()
-
     # --- TAB 2: SEO ---
     with tabs[1]:
         st.header(f"2. SEO Keywords")
@@ -473,3 +499,4 @@ else:
                     if delete_user(u_to_del):
                         st.success(f"Removed {u_to_del}"); time.sleep(1); st.rerun()
                     else: st.error("Failed")
+
