@@ -148,11 +148,13 @@ def analyze_image_configured(image_bytes, config_json, seo_keywords=""):
 tab1, tab2, tab3 = st.tabs(["⚙️ Setup (Create Rules)", "🚀 Run (Generate)", "🗂️ Manage Configs"])
 
 # ------------------------------------------
-# TAB 1: SETUP (Save to Google Sheets)
+# TAB 1: SETUP (With Editing Restored)
 # ------------------------------------------
 with tab1:
     st.header("Create New Category Configuration")
     
+    st.info("ℹ️ **How it works:** Upload your template and valid options. You can edit the data below before saving the rules.")
+
     c1, c2 = st.columns(2)
     with c1:
         # Upload Blank Template (Structure)
@@ -161,69 +163,95 @@ with tab1:
         # Upload Master Data (Dropdowns)
         master_file = st.file_uploader("2. Upload Master Data / Dropdowns (Excel)", type=["xlsx", "csv"])
 
+    # Variables to hold the final data to be used
+    final_columns = []
+    final_master_options = {}
+
+    # PROCESS TEMPLATE
     if template_file:
-        # Load Template Headers
+        st.divider()
+        st.subheader("1. Review Template Columns")
         if template_file.name.endswith('.csv'):
             df_temp = pd.read_csv(template_file)
         else:
             df_temp = pd.read_excel(template_file)
         
-        columns = df_temp.columns.tolist()
-        
-        # Load Master Data Dictionary
-        master_options = {}
-        if master_file:
-            if master_file.name.endswith('.csv'):
-                df_master = pd.read_csv(master_file)
-            else:
-                df_master = pd.read_excel(master_file)
-            
-            # Convert Master Data to dict: {ColumnName: [Option1, Option2...]}
-            for col in df_master.columns:
-                # Get unique values, drop NaNs
-                opts = df_master[col].dropna().unique().tolist()
-                master_options[col] = opts
-            
-            st.success(f"Loaded Master Data for columns: {', '.join(master_options.keys())}")
+        # Allow user to see/edit headers if needed (though usually fixed)
+        st.caption("These are the columns found in your template:")
+        st.dataframe(df_temp.head(3)) 
+        final_columns = df_temp.columns.tolist()
 
+    # PROCESS MASTER DATA (The "Edit" Feature)
+    if master_file:
         st.divider()
-        st.subheader("Map Your Columns")
+        st.subheader("2. Edit Master Data (Dropdowns)")
         
-        # Mapping Logic
+        if master_file.name.endswith('.csv'):
+            df_master = pd.read_csv(master_file)
+        else:
+            df_master = pd.read_excel(master_file)
+
+        # *** RESTORED FEATURE: Data Editor ***
+        st.caption("👇 You can add, delete, or fix typos in your valid options here before saving:")
+        edited_df_master = st.data_editor(df_master, num_rows="dynamic")
+        
+        # Convert the EDITED dataframe to dict
+        for col in edited_df_master.columns:
+            opts = edited_df_master[col].dropna().unique().tolist()
+            final_master_options[col] = opts
+        
+        st.success(f"✅ Loaded Options for: {', '.join(final_master_options.keys())}")
+
+    # MAPPING SECTION
+    if template_file:
+        st.divider()
+        st.subheader("3. Map Your Rules")
+        
         config_builder = []
         
-        # Use a form to prevent reload on every click
+        # Use a form to prevent reload
         with st.form("mapping_form"):
-            for col in columns:
-                c_a, c_b = st.columns([2, 1])
+            st.write("Define how each column should be filled:")
+            
+            for col in final_columns:
+                c_a, c_b, c_c = st.columns([2, 1, 2])
                 with c_a:
                     st.write(f"**{col}**")
                 with c_b:
                     # Determine type
-                    field_type = st.selectbox(f"Type for {col}", ["Fixed", "Input", "AI"], key=f"type_{col}")
+                    field_type = st.selectbox(f"Type", ["Fixed", "Input", "AI"], key=f"type_{col}", label_visibility="collapsed")
                 
+                with c_c:
+                    # Visual feedback on what the AI will do
+                    if field_type == "AI":
+                        if col in final_master_options:
+                            count = len(final_master_options[col])
+                            st.caption(f"🔒 **Strict Mode**: Picking from {count} options")
+                        else:
+                            st.caption(f"✨ **Creative Mode**: AI will write text/SEO")
+                    elif field_type == "Fixed":
+                        st.caption("will be 'FIXED_VALUE'")
+                    else:
+                        st.caption("will be left blank")
+
                 field_data = {"Column": col, "Type": field_type, "Options": []}
                 
-                # If AI and Master Data exists for this column, attach options automatically
-                if field_type == "AI" and col in master_options:
-                    field_data["Options"] = master_options[col]
-                    st.caption(f"✅ Linked {len(field_data['Options'])} dropdown options")
+                # Link options if they exist
+                if field_type == "AI" and col in final_master_options:
+                    field_data["Options"] = final_master_options[col]
                 
                 config_builder.append(field_data)
             
-            # Save Config Section
             st.divider()
-            category_name = st.text_input("Name this Category Configuration (e.g., 'Myntra Kurta')")
+            category_name = st.text_input("Name this Configuration (e.g., 'Myntra Kurta V1')")
             submitted = st.form_submit_button("Save Configuration to Database")
             
             if submitted and category_name:
                 json_config = json.dumps(config_builder)
                 ws = connect_to_gsheets()
                 if ws:
-                    # Append row: [Category Name, JSON Config]
                     ws.append_row([category_name, json_config])
-                    st.success(f"Configuration '{category_name}' saved to Google Sheets!")
-
+                    st.success(f"🎉 Configuration '{category_name}' saved successfully! Go to Tab 2 to run it.")
 # ------------------------------------------
 # TAB 2: RUN (Fetch from GSheets & Process)
 # ------------------------------------------
@@ -321,4 +349,5 @@ with tab3:
             
             st.warning("To delete configurations, please manually delete rows in your Google Sheet 'Agency_OS_Database'.")
             st.markdown(f"[Open Google Sheet](https://docs.google.com/spreadsheets/d/{ws.spreadsheet.id})")
+
 
