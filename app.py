@@ -384,14 +384,52 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN ---
+   # --- TAB 3: RUN ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
-        if not mp_cats: st.warning("No categories."); st.stop()
+        if not mp_cats: 
+            st.warning("No categories configured yet.")
+            st.stop()
         
         run_cat = st.selectbox("Select Category", mp_cats, key="run")
+        
+        # --- NEW FEATURE: DYNAMIC INPUT TEMPLATE ---
+        if run_cat:
+            config = load_config(selected_mp, run_cat)
+            if config:
+                # Identify columns required from Input
+                mapping = config.get('column_mapping', {})
+                required_cols = ["Image URL"] # Mandatory first column
+                
+                for col, rule in mapping.items():
+                    # Check for INPUT source (Config saves it as 'INPUT')
+                    if rule.get('source') == 'INPUT':
+                        required_cols.append(col)
+                
+                st.info(f"ℹ️ Required Input Columns: {', '.join(required_cols)}")
+                
+                # Generate empty template dataframe
+                df_template = pd.DataFrame(columns=required_cols)
+                
+                # Convert to Excel in memory
+                from io import BytesIO
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_template.to_excel(writer, index=False)
+                processed_data = output.getvalue()
+                
+                st.download_button(
+                    label="📥 Download Input Template for this Category",
+                    data=processed_data,
+                    file_name=f"{selected_mp}_{run_cat}_Input_Template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Download this empty file, fill in your data, and upload it below."
+                )
+                st.divider()
+
+        # --- EXISTING UPLOAD LOGIC ---
         active_kws = get_seo(selected_mp, run_cat)
-        input_file = st.file_uploader("Input Data (.xlsx)", type=["xlsx"], key="run_in")
+        input_file = st.file_uploader("Upload Input Data (filled template)", type=["xlsx"], key="run_in")
         
         if input_file:
             df_input = pd.read_excel(input_file)
@@ -399,17 +437,21 @@ else:
             
             est_cost_usd = row_count * 0.02
             
-            st.divider()
             c_cost1, c_cost2 = st.columns(2)
             c_cost1.metric("📦 Items", f"{row_count} SKUs")
             c_cost2.metric("💲 Est. Cost", f"${est_cost_usd:.2f}")
             
             if st.button("▶️ Start Generation"):
-                config = load_config(selected_mp, run_cat)
-                img_col = next((c for c in df_input.columns if "front" in c.lower() or "image" in c.lower() or "url" in c.lower()), None)
-                if not img_col: st.error("No Image column."); st.stop()
+                # config is already loaded above
                 
-                progress = st.progress(0); status = st.empty()
+                # Smart Column Detection for Images
+                img_col = next((c for c in df_input.columns if "front" in c.lower() or "image" in c.lower() or "url" in c.lower()), None)
+                if not img_col: 
+                    st.error("❌ Error: No 'Image URL' column found in uploaded file.")
+                    st.stop()
+                
+                progress = st.progress(0)
+                status = st.empty()
                 final_rows = []
                 cache = {}
                 mapping = config['column_mapping']
@@ -423,39 +465,65 @@ else:
                     needs_ai = any(m['source']=='AI' for m in mapping.values())
                     
                     if needs_ai:
-                        if img_url in cache: ai_data = cache[img_url]
+                        if img_url in cache: 
+                            ai_data = cache[img_url]
                         else:
-                            hints = ", ".join([f"{k}: {v}" for k,v in row.items() if "color" in k.lower() or "fabric" in k.lower()])
+                            # Context hints from input columns
+                            hints = ", ".join([f"{k}: {v}" for k,v in row.items() if str(v) != "nan"])
                             ai_data, _ = analyze_image_configured(client, img_url, hints, active_kws, config, selected_mp)
                             if ai_data: cache[img_url] = ai_data
                     
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
+                        
                         if rule['source'] == 'INPUT':
+                            # Exact match first, then fuzzy
                             val = ""
-                            if col in df_input.columns: val = row[col]
+                            if col in df_input.columns: 
+                                val = row[col]
                             else:
+                                # Fallback search
                                 for ic in df_input.columns:
-                                    if ic.lower() in col.lower(): val = row[ic]; break
+                                    if ic.lower() in col.lower(): 
+                                        val = row[ic]
+                                        break
                             new_row[col] = val
-                        elif rule['source'] == 'FIXED': new_row[col] = rule['value']
+                            
+                        elif rule['source'] == 'FIXED': 
+                            new_row[col] = rule['value']
+                            
                         elif rule['source'] == 'AI' and ai_data:
                             found = False
-                            if col in ai_data: new_row[col] = ai_data[col]; found = True
+                            # Try exact key match
+                            if col in ai_data: 
+                                new_row[col] = ai_data[col]
+                                found = True
                             else:
+                                # Try fuzzy key match from AI JSON
                                 for k,v in ai_data.items():
-                                    if k.lower().replace(" ","") in col.lower().replace(" ",""): new_row[col] = v; found = True; break
+                                    if k.lower().replace(" ","") in col.lower().replace(" ",""): 
+                                        new_row[col] = v
+                                        found = True
+                                        break
                             if not found: new_row[col] = ""
-                        else: new_row[col] = ""
+                        else: 
+                            new_row[col] = ""
+                            
                     final_rows.append(new_row)
                     
                 out_df = pd.DataFrame(final_rows)
                 fn = f"{selected_mp}_{run_cat}_Generated.xlsx"
-                out_df.to_excel(fn, index=False)
-                st.success("Done!")
-                with open(fn, "rb") as f: st.download_button("Download", f, file_name=fn)
+                
+                # Buffer for download
+                output_gen = BytesIO()
+                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer:
+                    out_df.to_excel(writer, index=False)
+                processed_gen = output_gen.getvalue()
 
+                st.success("✅ Generation Complete!")
+                st.download_button("⬇️ Download Catalog", processed_gen, file_name=fn)
+                
     # --- ADMIN ONLY TABS ---
     if st.session_state.user_role.lower() == "admin":
         
@@ -499,5 +567,6 @@ else:
                     if delete_user(u_to_del):
                         st.success(f"Removed {u_to_del}"); time.sleep(1); st.rerun()
                     else: st.error("Failed")
+
 
 
