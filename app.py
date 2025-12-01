@@ -23,122 +23,173 @@ except ImportError as e:
 st.set_page_config(page_title="HOB OS - V10.5", layout="wide")
 
 # ==========================================
-# 1. AUTHENTICATION & DATABASE CONNECT
+# 1. AUTHENTICATION & DATABASE CONNECT (CACHED)
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = ""
     st.session_state.username = ""
 
+# --- CACHED CONNECTION ---
+@st.cache_resource
+def init_connection():
+    """Establish connection to Google Sheets once."""
+    try:
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        return None
+
+# --- CACHED DATA FETCHING ---
+@st.cache_data(ttl=60) # Refreshes automatically every 60 seconds
+def get_worksheet_data(sheet_name, worksheet_name):
+    """Fetch all records from a worksheet and cache them."""
+    client = init_connection()
+    if not client: return []
+    try:
+        sh = client.open(sheet_name)
+        ws = sh.worksheet(worksheet_name)
+        return ws.get_all_values()
+    except: return []
+
+# Global Constants for Sheet Names
+SHEET_NAME = "Agency_OS_Database"
+
+# Initialize OpenAI Client (No change needed)
 try:
     api_key = st.secrets["OPENAI_API_KEY"]
     client = OpenAI(api_key=api_key)
-
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    gc = gspread.authorize(creds)
-    
-    SHEET_NAME = "Agency_OS_Database"
-    try:
-        sh = gc.open(SHEET_NAME)
-        ws_configs = sh.worksheet("Configs")
-        ws_seo = sh.worksheet("SEO_Data")
-        try:
-            ws_users = sh.worksheet("Users")
-        except:
-            st.error("⚠️ Database Error: 'Users' worksheet missing.")
-            st.stop()
-    except Exception as e:
-        st.error(f"❌ Database connection failed: {str(e)}")
-        st.stop()
-    
 except Exception as e:
     st.error(f"❌ Secrets Error: {str(e)}")
     st.stop()
 
 # ==========================================
-# 2. CORE LOGIC & UTILS
+# 2. CORE LOGIC & UTILS (OPTIMIZED)
 # ==========================================
+
+def get_worksheet_object(ws_name):
+    """Helper to get write-access worksheet object (Cannot cache write objects)"""
+    gc = init_connection()
+    return gc.open(SHEET_NAME).worksheet(ws_name)
+
 def check_login(username, password):
-    try:
-        users = ws_users.get_all_records()
-        for u in users:
-            if str(u['Username']).strip() == username and str(u['Password']).strip() == password:
-                return True, u['Role']
-        return False, None
-    except: return False, None
+    # Use cached data instead of API call
+    rows = get_worksheet_data(SHEET_NAME, "Users")
+    # Skip header row [0] usually, assuming row 1 is headers
+    if not rows: return False, None
+    
+    # Simple parsing assuming headers: Username, Password, Role
+    # Find index of columns if needed, or assume order 0, 1, 2
+    for row in rows[1:]: 
+        if len(row) >= 3:
+            if str(row[0]).strip() == username and str(row[1]).strip() == password:
+                return True, row[2]
+    return False, None
 
 def create_user(username, password, role):
     try:
-        if ws_users.find(username): return False, "User exists"
-        ws_users.append_row([username, password, role])
+        ws = get_worksheet_object("Users")
+        # Check cache first to avoid duplicates without API call
+        existing = [r[0] for r in get_worksheet_data(SHEET_NAME, "Users")]
+        if username in existing: return False, "User exists"
+        
+        ws.append_row([username, password, role])
+        st.cache_data.clear() # Clear cache so next read sees new user
         return True, "Created"
-    except: return False, "DB Error"
+    except Exception as e: return False, str(e)
 
 def delete_user(username):
     try:
-        cell = ws_users.find(username)
-        if cell: ws_users.delete_rows(cell.row); return True
+        ws = get_worksheet_object("Users")
+        cell = ws.find(username)
+        if cell: 
+            ws.delete_rows(cell.row)
+            st.cache_data.clear() # Clear cache
+            return True
         return False
     except: return False
 
-def get_all_users(): return ws_users.get_all_records()
+def get_all_users(): 
+    rows = get_worksheet_data(SHEET_NAME, "Users")
+    if len(rows) > 1:
+        headers = rows[0]
+        return [dict(zip(headers, r)) for r in rows[1:]]
+    return []
 
 def get_categories_for_marketplace(marketplace):
-    try:
-        rows = ws_configs.get_all_values()
-        cats = [row[1] for row in rows if len(row) > 1 and row[0] == marketplace]
-        return list(set([c for c in cats if c and c != "Category"]))
-    except: return []
+    rows = get_worksheet_data(SHEET_NAME, "Configs")
+    # Row format: [Marketplace, Category, JSON]
+    cats = [row[1] for row in rows if len(row) > 1 and row[0] == marketplace]
+    return list(set([c for c in cats if c and c != "Category"]))
 
 def save_config(marketplace, category, data):
     try:
+        ws = get_worksheet_object("Configs")
         json_str = json.dumps(data)
-        rows = ws_configs.get_all_values()
-        for i, row in enumerate(rows):
-            if len(row) > 1 and row[0] == marketplace and row[1] == category:
-                ws_configs.update_cell(i + 1, 3, json_str); return True
-        ws_configs.append_row([marketplace, category, json_str]); return True
+        
+        # We must find the row index physically
+        cell = None
+        try:
+            # Try to find purely by string search (risky if duplicates) or iterate
+            # Safe way: iterate rows to find match
+            all_vals = ws.get_all_values()
+            for i, row in enumerate(all_vals):
+                if len(row) > 1 and row[0] == marketplace and row[1] == category:
+                    ws.update_cell(i + 1, 3, json_str)
+                    st.cache_data.clear()
+                    return True
+            # If not found, append
+            ws.append_row([marketplace, category, json_str])
+            st.cache_data.clear()
+            return True
+        except: return False
     except: return False
 
 def load_config(marketplace, category):
-    try:
-        rows = ws_configs.get_all_values()
-        for row in rows:
-            if len(row) > 2 and row[0] == marketplace and row[1] == category:
-                return json.loads(row[2])
-        return None
-    except: return None
+    rows = get_worksheet_data(SHEET_NAME, "Configs")
+    for row in rows:
+        if len(row) > 2 and row[0] == marketplace and row[1] == category:
+            return json.loads(row[2])
+    return None
 
 def delete_config(marketplace, category):
     try:
-        rows = ws_configs.get_all_values()
-        for i, row in enumerate(rows):
+        ws = get_worksheet_object("Configs")
+        # Need to find row index to delete
+        all_vals = ws.get_all_values()
+        for i, row in enumerate(all_vals):
             if len(row) > 1 and row[0] == marketplace and row[1] == category:
-                ws_configs.delete_rows(i + 1); return True
+                ws.delete_rows(i + 1)
+                st.cache_data.clear()
+                return True
         return False
     except: return False
 
 def save_seo(marketplace, category, keywords_list):
     try:
+        ws = get_worksheet_object("SEO_Data")
         kw_string = ", ".join([str(k).strip() for k in keywords_list if str(k).strip()])
-        rows = ws_seo.get_all_values()
-        for i, row in enumerate(rows):
+        
+        all_vals = ws.get_all_values()
+        for i, row in enumerate(all_vals):
             if len(row) > 1 and row[0] == marketplace and row[1] == category:
-                ws_seo.update_cell(i + 1, 3, kw_string); return True
-        ws_seo.append_row([marketplace, category, kw_string]); return True
+                ws.update_cell(i + 1, 3, kw_string)
+                st.cache_data.clear()
+                return True
+        ws.append_row([marketplace, category, kw_string])
+        st.cache_data.clear()
+        return True
     except: return False
 
 def get_seo(marketplace, category):
-    try:
-        rows = ws_seo.get_all_values()
-        for row in rows:
-            if len(row) > 2 and row[0] == marketplace and row[1] == category:
-                return row[2]
-        return ""
-    except: return ""
-
+    rows = get_worksheet_data(SHEET_NAME, "SEO_Data")
+    for row in rows:
+        if len(row) > 2 and row[0] == marketplace and row[1] == category:
+            return row[2]
+    return ""
 def parse_master_data(file):
     df = pd.read_excel(file)
     valid_options = {}
@@ -492,3 +543,4 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
