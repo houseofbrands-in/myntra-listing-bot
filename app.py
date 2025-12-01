@@ -470,6 +470,7 @@ else:
             st.stop()
         
         run_cat = st.selectbox("Select Category", mp_cats, key="run")
+        config = None
         if run_cat:
             config = load_config(selected_mp, run_cat)
             if config:
@@ -482,7 +483,7 @@ else:
         active_kws = get_seo(selected_mp, run_cat)
         input_file = st.file_uploader("Upload Input Data (filled template)", type=["xlsx"], key="run_in")
         
-       if input_file:
+        if input_file:
             df_input = pd.read_excel(input_file)
             total_rows = len(df_input)
             
@@ -659,6 +660,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
