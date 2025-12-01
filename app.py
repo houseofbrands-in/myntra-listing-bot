@@ -275,62 +275,74 @@ def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
             return final_bg, None
     except Exception as e: return None, str(e)
 
-# --- AI LOGIC (HYBRID ENGINE V2) ---
+# --- AI LOGIC (HYBRID ENGINE V2) ---# --- AI LOGIC (STRICT GEMINI VERSION) ---
 def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # Prepare Master Data context
-    relevant_options = {}
-    ai_target_headers = []
+    # 1. Sort columns into "Technical" (Strict) vs "Creative" (Free)
+    tech_cols = []
+    creative_cols = []
+    
+    # We build a specific "Menu" for Gemini to read
+    gemini_constraints = [] 
+    relevant_options = {} # Keep this for GPT as it likes JSON
+    
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
-            ai_target_headers.append(col)
+            # Check if this column has strict Master Data
+            master_options = []
             for master_col, opts in config['master_data'].items():
                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                    relevant_options[col] = opts
+                    master_options = opts
                     break
+            
+            if master_options:
+                tech_cols.append(col)
+                relevant_options[col] = master_options
+                # FORMATTING FOR GEMINI: Explicitly link Column -> Options
+                gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
+            else:
+                creative_cols.append(col)
 
+    all_targets = tech_cols + creative_cols
+
+    # 2. Construct Marketplace Rules
     seo_section = f"SEO KEYWORDS: {keywords}" if keywords else ""
-    
     mp_rules = ""
     if marketplace.lower() == "amazon":
         mp_rules = """
-        - Bullet Points: 5 distinct selling points. Start each with a BOLD header (e.g., <b>Soft Fabric:</b>).
+        - Bullet Points: 5 bullets. START each with a BOLD header (e.g., <b>Soft Fabric:</b>).
         - Title: [Brand] + [Department] + [Material] + [Pattern] + [Style].
         """
     elif marketplace.lower() == "myntra":
-        mp_rules = "- Title: Brand + Gender + Style + Category (Short & Punchy)."
+        mp_rules = "- Title: Short, punchy, Brand + Category + Style."
 
-    prompt = f"""
-    You are a Data Validation Bot for {marketplace}. 
-    TASK: Extract attributes for these columns: {ai_target_headers}
-    CONTEXT: {user_hints}
-    {seo_section}
-    {mp_rules}
-    
-    CRITICAL MASTER DATA RULES:
-    You have been given strict lists of allowed values. 
-    {json.dumps(relevant_options)}
-    
-    1. IF A COLUMN HAS A LIST: You MUST pick one value from that list EXACTLY. 
-       - If image shows "No Sleeves" but list says "Sleeveless", write "Sleeveless".
-       - Do not invent new words. 
-       
-    2. CREATIVE COLUMNS (Title, Description): 
-       - Write enticing, sales-focused copy.
-       - Use keywords naturally.
-       
-    OUTPUT: JSON Only.
-    """
-
+    # 3. ENGINE SWITCHING & PROMPTING
     try:
-        # --- GPT-4o ---
+        # ======================================================
+        # OPTION A: GPT-4o (Uses JSON Context - Existing Logic)
+        # ======================================================
         if "GPT" in model_choice:
+            prompt = f"""
+            You are a Data Expert for {marketplace}.
+            TASK: Generate JSON for: {all_targets}
+            CONTEXT: {user_hints}
+            {seo_section}
+            {mp_rules}
+            
+            STRICT DATA RULES:
+            {json.dumps(relevant_options)}
+            
+            INSTRUCTIONS:
+            1. For technical columns, you MUST select the exact value from the list above.
+            2. For creative columns, use enticing sales language.
+            """
+            
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a JSON-only data assistant."},
+                    {"role": "system", "content": "You are a JSON-only assistant."},
                     {"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
                 ],
                 response_format={"type": "json_object"},
@@ -338,16 +350,39 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             )
             return json.loads(response.choices[0].message.content), None
 
-        # --- GEMINI 2.5 FLASH (UPDATED) ---
+        # ======================================================
+        # OPTION B: GEMINI (Uses Explicit Constraint Prompting)
+        # ======================================================
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
             
-            # Using version 2.5 as discovered
             model = genai.GenerativeModel('gemini-2.5-flash') 
             img_data = base64.b64decode(base64_image)
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
-            gemini_prompt = prompt + "\n\nIMPORTANT: Return ONLY the raw JSON string. No markdown."
+            # We build the prompt differently for Gemini to force strictness
+            gemini_prompt = f"""
+            You are a Cataloging Bot for {marketplace}.
+            
+            STEP 1: ANALYZE THE IMAGE.
+            STEP 2: FILL THE FOLLOWING COLUMNS.
+            
+            --- TECHNICAL COLUMNS (STRICT SELECTION ONLY) ---
+            For these columns, you are FORBIDDEN from inventing words. You MUST pick from the list provided:
+            
+            {chr(10).join(gemini_constraints)}
+            
+            (Rule: If the image shows "No Sleeves" but the list has "Sleeveless", you MUST write "Sleeveless".)
+            
+            --- CREATIVE COLUMNS (MARKETING COPY) ---
+            Target Columns: {creative_cols}
+            Instructions: {mp_rules}
+            {seo_section}
+            
+            --- OUTPUT FORMAT ---
+            Return ONLY a valid JSON object containing all requested columns.
+            """
+            
             response = model.generate_content([gemini_prompt, image_part])
             
             text_out = response.text
@@ -662,3 +697,4 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
