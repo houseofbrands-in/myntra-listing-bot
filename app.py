@@ -332,7 +332,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
             
             # UPDATED MODEL NAME HERE
-            model = genai.GenerativeModel('gemini-1.5-flash') 
+            model = genai.GenerativeModel('gemini-2.5-flash') 
             
             img_data = base64.b64decode(base64_image)
             image_part = {"mime_type": "image/jpeg", "data": img_data}
@@ -668,6 +668,7 @@ if st.sidebar.button("🛠️ Check Gemini Models"):
             st.sidebar.json(found_models)
     except Exception as e:
         st.sidebar.error(f"Error: {e}")
+
 
 
 
