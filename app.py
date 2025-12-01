@@ -456,7 +456,7 @@ else:
         active_kws = get_seo(selected_mp, run_cat)
         input_file = st.file_uploader("Upload Input Data (filled template)", type=["xlsx"], key="run_in")
         
-        if input_file:
+       if input_file:
             df_input = pd.read_excel(input_file)
             total_rows = len(df_input)
             
@@ -478,7 +478,7 @@ else:
             est_cost = len(df_to_process) * 0.02
             st.metric("Estimated Cost", f"${est_cost:.2f}")
 
-         if st.button("▶️ Start Generation"):
+            if st.button("▶️ Start Generation"):
                 # 1. Identify Image Column
                 img_col = next((c for c in df_input.columns if "front" in c.lower() or "image" in c.lower() or "url" in c.lower()), None)
                 if not img_col: 
@@ -561,9 +561,9 @@ else:
                                             new_row[col] = v
                                             found = True
                                             break
-                                if not found: new_row[col] = "" # AI returned data, but didn't find this specific key
+                                if not found: new_row[col] = "" 
                             else:
-                                new_row[col] = "" # AI failed completely
+                                new_row[col] = "" # AI failed
 
                         else: 
                             new_row[col] = ""
@@ -577,7 +577,7 @@ else:
                 
                 st.success("✅ Done! Check above if any red errors appeared.")
                 st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
-    # --- TAB 4: TOOLS ---
+                # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🖼️ Bulk Image Processor")
         st.markdown("**Features:** Size Control, White Bars/Padding, AI Background Removal.")
@@ -639,6 +639,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
