@@ -485,7 +485,7 @@ else:
             with c_run1:
                 run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"])
             with c_run2:
-                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 1.5 Flash"])
+                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash"])
             with c_run3:
                 # LET USER SELECT THE IMAGE COLUMN MANUALLY
                 potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
@@ -668,6 +668,7 @@ if st.sidebar.button("🛠️ Check Gemini Models"):
             st.sidebar.json(found_models)
     except Exception as e:
         st.sidebar.error(f"Error: {e}")
+
 
 
 
