@@ -274,7 +274,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # 2. Prepare Context (Dropdowns vs Free Text)
+    # 2. Prepare Context
     relevant_options = {}
     ai_target_headers = []
     for col, settings in config['column_mapping'].items():
@@ -285,41 +285,34 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
                     relevant_options[col] = opts
                     break
 
-    # 3. The "Creative" Prompt
-    seo_section = f"SEO KEYWORDS TO INCLUDE: {keywords}" if keywords else ""
-    
+    # 3. Prompt
+    seo_section = f"SEO KEYWORDS: {keywords}" if keywords else ""
     mp_rules = ""
     if marketplace.lower() == "amazon":
         mp_rules = """
         - Bullet Points: 5 bullets. START each with a BOLD header (e.g., <b>Soft Fabric:</b>).
-        - Title Structure: [Brand] + [Department] + [Material] + [Key Feature] + [Color].
+        - Title: [Brand] + [Department] + [Material] + [Key Feature] + [Color].
         """
     elif marketplace.lower() == "myntra":
         mp_rules = "- Title: Short, punchy, Brand + Category + Style."
 
     prompt = f"""
-    You are a Senior Fashion Copywriter and Data Specialist for {marketplace}.
-    
-    TASK: Generate a JSON object for these columns: {ai_target_headers}
-    
-    INPUT CONTEXT: {user_hints}
+    You are a Fashion Data Expert for {marketplace}.
+    TASK: Generate JSON for: {ai_target_headers}
+    CONTEXT: {user_hints}
     {seo_section}
     {mp_rules}
     
-    CRITICAL INSTRUCTIONS:
-    1. **TECHNICAL COLUMNS** (Material, Sleeve, Neck): Use STRICT matches from these options: {json.dumps(relevant_options)}.
-    2. **CREATIVE COLUMNS** (Title, Description, Bullet Points):
-       - Do NOT be generic (e.g., don't just say "Brand Casual Shirt"). 
-       - Be EVOCATIVE. Use sensory words (e.g., "breathable cotton," "effortless style," "structured fit").
-       - Integrate the SEO Keywords naturally.
-    
-    OUTPUT FORMAT: purely JSON.
+    INSTRUCTIONS:
+    1. TECHNICAL SPECS: Use STRICT matches from: {json.dumps(relevant_options)}.
+    2. CREATIVE TEXT: Be evocative, sensory, and sales-driven.
+    3. OUTPUT: JSON only.
     """
 
-    # 4. Engine Switching Logic
+    # 4. Engine Switching
     try:
         # --- OPTION A: GPT-4o ---
-        if model_choice == "GPT-4o":
+        if "GPT" in model_choice:
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -334,22 +327,21 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             )
             return json.loads(response.choices[0].message.content), None
 
-        # --- OPTION B: GEMINI 1.5 PRO (High Creativity) ---
-        elif model_choice == "Gemini 1.5 Pro":
-            if not GEMINI_AVAILABLE: return None, "Gemini API Key missing in secrets."
+        # --- OPTION B: GEMINI 1.5 FLASH (Updated) ---
+        elif "Gemini" in model_choice:
+            if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
             
-            # Gemini handles images differently (requires decoded bytes)
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            # UPDATED MODEL NAME HERE
+            model = genai.GenerativeModel('gemini-1.5-flash') 
+            
             img_data = base64.b64decode(base64_image)
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
-            # Force JSON via prompt engineering for Gemini
             gemini_prompt = prompt + "\n\nIMPORTANT: Return ONLY the raw JSON string. No markdown."
-            
             response = model.generate_content([gemini_prompt, image_part])
             
-            # Clean Gemini cleanup (remove ```json ... ```)
             text_out = response.text
+            # Clean Markdown
             if "```json" in text_out:
                 text_out = text_out.split("```json")[1].split("```")[0]
             elif "```" in text_out:
@@ -493,7 +485,7 @@ else:
             with c_run1:
                 run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"])
             with c_run2:
-                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 1.5 Pro"])
+                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 1.5 Flash"])
             with c_run3:
                 # LET USER SELECT THE IMAGE COLUMN MANUALLY
                 potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
@@ -660,6 +652,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
