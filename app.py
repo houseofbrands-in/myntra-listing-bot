@@ -44,7 +44,7 @@ def init_connection():
         return None
 
 # --- CACHED DATA FETCHING ---
-@st.cache_data(ttl=60) # Refreshes automatically every 60 seconds
+@st.cache_data # Refreshes automatically every 60 seconds
 def get_worksheet_data(sheet_name, worksheet_name):
     """Fetch all records from a worksheet and cache them."""
     client = init_connection()
@@ -543,4 +543,5 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
