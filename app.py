@@ -478,69 +478,105 @@ else:
             est_cost = len(df_to_process) * 0.02
             st.metric("Estimated Cost", f"${est_cost:.2f}")
 
-            if st.button("▶️ Start Generation"):
+         if st.button("▶️ Start Generation"):
+                # 1. Identify Image Column
                 img_col = next((c for c in df_input.columns if "front" in c.lower() or "image" in c.lower() or "url" in c.lower()), None)
-                if not img_col: st.error("❌ No 'Image URL' column found."); st.stop()
+                if not img_col: 
+                    st.error("❌ Column Missing: Your input Excel must have a column named 'Image URL', 'Front Image', or similar.")
+                    st.stop()
                 
-                progress = st.progress(0); status = st.empty()
-                final_rows = []; cache = {}; mapping = config['column_mapping']
-                
+                progress = st.progress(0)
+                status = st.empty()
+                error_log = st.empty() # New container for errors
+                final_rows = []
+                cache = {}
+                mapping = config['column_mapping']
                 current_total = len(df_to_process)
                 
+                # 2. Processing Loop
                 for idx, row in df_to_process.iterrows():
-                    status.text(f"Processing Row {idx+1}/{current_total} using {model_select}...")
+                    status.text(f"Processing Row {idx+1}/{current_total} ({model_select})...")
                     progress.progress((idx+1)/current_total)
                     
                     img_url = str(row.get(img_col, "")).strip()
                     ai_data = None
+                    last_error = "Unknown Error"
+                    
+                    # check if we actually need AI for this row
                     needs_ai = any(m['source']=='AI' for m in mapping.values())
                     
                     if needs_ai:
-                        if img_url in cache: ai_data = cache[img_url]
+                        if img_url in cache: 
+                            ai_data = cache[img_url]
                         else:
                             hints = ", ".join([f"{k}: {v}" for k,v in row.items() if str(v) != "nan" and k != img_col])
                             
-                            # --- RETRY LOGIC (Prevents Skipping) ---
+                            # RETRY LOGIC
                             attempts = 0
                             max_retries = 2
                             while attempts < max_retries:
-                                # Call the NEW Hybrid Function
-                                ai_data, err = analyze_image_hybrid(model_select, client, img_url, hints, active_kws, config, selected_mp)
+                                ai_data, last_error = analyze_image_hybrid(model_select, client, img_url, hints, active_kws, config, selected_mp)
                                 if ai_data: 
-                                    break # Success
+                                    break # Success!
                                 else:
                                     attempts += 1
-                                    time.sleep(2) # Wait 2s before retry
-                                    print(f"Retry {attempts} for {img_url}: {err}")
+                                    time.sleep(1) 
                             
-                            if ai_data: cache[img_url] = ai_data
+                            if ai_data: 
+                                cache[img_url] = ai_data
+                            else:
+                                # *** DEBUG: SHOW ERROR ***
+                                error_log.error(f"❌ Row {idx+1} Failed: {last_error} | URL: {img_url}")
                     
+                    # 3. Map Data to Output Columns
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
+                        
                         if rule['source'] == 'INPUT':
                             val = ""
                             if col in df_input.columns: val = row[col]
                             else:
+                                # Fuzzy match input columns
                                 for ic in df_input.columns:
                                     if ic.lower() in col.lower(): val = row[ic]; break
                             new_row[col] = val
-                        elif rule['source'] == 'FIXED': new_row[col] = rule['value']
-                        elif rule['source'] == 'AI' and ai_data:
-                            found = False
-                            if col in ai_data: new_row[col] = ai_data[col]; found = True
+
+                        elif rule['source'] == 'FIXED': 
+                            new_row[col] = rule['value']
+
+                        elif rule['source'] == 'AI':
+                            if ai_data:
+                                found = False
+                                # Try exact match
+                                if col in ai_data: 
+                                    new_row[col] = ai_data[col]
+                                    found = True
+                                else:
+                                    # Try fuzzy match (ignore case/spaces)
+                                    clean_col = col.lower().replace(" ", "").replace("_", "")
+                                    for k, v in ai_data.items():
+                                        clean_k = k.lower().replace(" ", "").replace("_", "")
+                                        if clean_k in clean_col or clean_col in clean_k:
+                                            new_row[col] = v
+                                            found = True
+                                            break
+                                if not found: new_row[col] = "" # AI returned data, but didn't find this specific key
                             else:
-                                for k,v in ai_data.items():
-                                    if k.lower().replace(" ","") in col.lower().replace(" ",""): new_row[col] = v; found = True; break
-                            if not found: new_row[col] = ""
-                        else: new_row[col] = ""
+                                new_row[col] = "" # AI failed completely
+
+                        else: 
+                            new_row[col] = ""
+                            
                     final_rows.append(new_row)
                 
+                # 4. Final Output
                 output_gen = BytesIO()
-                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: pd.DataFrame(final_rows).to_excel(writer, index=False)
-                st.success("✅ Done!")
+                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
+                    pd.DataFrame(final_rows).to_excel(writer, index=False)
+                
+                st.success("✅ Done! Check above if any red errors appeared.")
                 st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
-
     # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🖼️ Bulk Image Processor")
@@ -603,6 +639,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
