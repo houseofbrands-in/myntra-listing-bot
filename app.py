@@ -208,13 +208,35 @@ def parse_master_data(file):
 
 def encode_image_from_url(url):
     try:
-        if pd.isna(url) or str(url).strip() == "": return None, "Empty URL"
+        if pd.isna(url) or str(url).strip() == "": 
+            return None, "Empty URL"
+        
+        url = str(url).strip()
+        
+        # Dropbox Fix
         if "dropbox.com" in url:
             url = url.replace("?dl=0", "").replace("&dl=0", "") + ("&dl=1" if "?" in url else "?dl=1")
-        response = requests.get(url, timeout=10)
-        return (base64.b64encode(response.content).decode('utf-8'), None) if response.status_code == 200 else (None, "Download Error")
-    except Exception as e: return None, str(e)
+        
+        # Google Drive Fix (Convert View links to Export links)
+        if "drive.google.com" in url and "/view" in url:
+            file_id = url.split("/d/")[1].split("/")[0]
+            url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
+        # --- THE CRITICAL FIX: USER-AGENT HEADERS ---
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            "Referer": "https://www.google.com/"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            return base64.b64encode(response.content).decode('utf-8'), None
+        else:
+            return None, f"Download Error: Status {response.status_code}"
+            
+    except Exception as e: 
+        return None, f"Network Error: {str(e)}"
 # --- IMAGE PROCESSOR ---
 def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
     try:
@@ -510,7 +532,8 @@ else:
                     
                     # check if we actually need AI for this row
                     needs_ai = any(m['source']=='AI' for m in mapping.values())
-                    
+                    # --- DEBUGGING PRINT ---
+                    st.caption(f"🔎 Analyzing: {img_url}")
                     if needs_ai:
                         if img_url in cache: 
                             ai_data = cache[img_url]
@@ -531,7 +554,7 @@ else:
                             if ai_data: 
                                 cache[img_url] = ai_data
                             else:
-                                error_log.error(f"❌ Row {idx+1} Failed: {last_error} | URL: {img_url}")
+                                st.error(f"❌ FAILED [Row {idx+1}]: {last_error}") # Print big red error
                     
                     # 3. Map Data to Output Columns
                     new_row = {}
@@ -641,6 +664,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
