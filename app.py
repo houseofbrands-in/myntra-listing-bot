@@ -10,7 +10,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
 import zipfile
 from PIL import Image, ImageOps
-
+import google.generativeai as genai # NEW
 # --- DEPENDENCY CHECK ---
 try:
     from rembg import remove as remove_bg_ai
@@ -58,14 +58,22 @@ def get_worksheet_data(sheet_name, worksheet_name):
 # Global Constants for Sheet Names
 SHEET_NAME = "Agency_OS_Database"
 
-# Initialize OpenAI Client (No change needed)
+# ... existing auth code ...
 try:
+    # OpenAI
     api_key = st.secrets["OPENAI_API_KEY"]
     client = OpenAI(api_key=api_key)
+    
+    # Gemini (NEW)
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        GEMINI_AVAILABLE = True
+    except:
+        GEMINI_AVAILABLE = False
+
 except Exception as e:
     st.error(f"❌ Secrets Error: {str(e)}")
     st.stop()
-
 # ==========================================
 # 2. CORE LOGIC & UTILS (OPTIMIZED)
 # ==========================================
@@ -239,13 +247,14 @@ def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
     except Exception as e: return None, str(e)
 
 # --- AI LOGIC (UPDATED V10.5) ---
-def analyze_image_configured(client, image_url, user_hints, keywords, config, marketplace):
+def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
+    # 1. Prepare Image
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
+    # 2. Prepare Context (Dropdowns vs Free Text)
     relevant_options = {}
     ai_target_headers = []
-    
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
             ai_target_headers.append(col)
@@ -254,46 +263,82 @@ def analyze_image_configured(client, image_url, user_hints, keywords, config, ma
                     relevant_options[col] = opts
                     break
 
-    seo_instruction = ""
-    if keywords: seo_instruction = f"MANDATORY SEO KEYWORDS: {keywords}"
-
-    mp_instruction = ""
-    # --- NEW: AMAZON HTML RULES ---
+    # 3. The "Creative" Prompt
+    seo_section = f"SEO KEYWORDS TO INCLUDE: {keywords}" if keywords else ""
+    
+    mp_rules = ""
     if marketplace.lower() == "amazon":
-        mp_instruction = """
-        AMAZON SPECIFIC RULES:
-        1. Bullet Points: Write 5 distinct selling points. MANDATORY: Start each bullet with a header in HTML bold tags, e.g., '<b>PREMIUM COTTON:</b> This fabric is...'.
-        2. Search Terms: Max 250 bytes, space separated, no commas.
-        3. Title: [Brand] + [Dept] + [Material] + [Style] + [Color].
+        mp_rules = """
+        - Bullet Points: 5 bullets. START each with a BOLD header (e.g., <b>Soft Fabric:</b>).
+        - Title Structure: [Brand] + [Department] + [Material] + [Key Feature] + [Color].
         """
     elif marketplace.lower() == "myntra":
-        mp_instruction = "MYNTRA RULES: Focus on specific attributes (Neck, Sleeve, Pattern). Short, punchy title."
+        mp_rules = "- Title: Short, punchy, Brand + Category + Style."
 
     prompt = f"""
-    You are a Cataloging Expert for {marketplace}.
-    CATEGORY: {config['category_name']}
-    CONTEXT: {user_hints}
-    TASK: Fill these attributes: {ai_target_headers}
-    {seo_instruction}
-    {mp_instruction}
-    STRICT DROPDOWN VALUES: {json.dumps(relevant_options, indent=2)}
-    RETURN RAW JSON.
+    You are a Senior Fashion Copywriter and Data Specialist for {marketplace}.
+    
+    TASK: Generate a JSON object for these columns: {ai_target_headers}
+    
+    INPUT CONTEXT: {user_hints}
+    {seo_section}
+    {mp_rules}
+    
+    CRITICAL INSTRUCTIONS:
+    1. **TECHNICAL COLUMNS** (Material, Sleeve, Neck): Use STRICT matches from these options: {json.dumps(relevant_options)}.
+    2. **CREATIVE COLUMNS** (Title, Description, Bullet Points):
+       - Do NOT be generic (e.g., don't just say "Brand Casual Shirt"). 
+       - Be EVOCATIVE. Use sensory words (e.g., "breathable cotton," "effortless style," "structured fit").
+       - Integrate the SEO Keywords naturally.
+    
+    OUTPUT FORMAT: purely JSON.
     """
 
+    # 4. Engine Switching Logic
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a JSON-only assistant."},
-                {"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=2000
-        )
-        return json.loads(response.choices[0].message.content), None
+        # --- OPTION A: GPT-4o ---
+        if model_choice == "GPT-4o":
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a JSON-only fashion assistant."},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": prompt}, 
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]}
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=1500
+            )
+            return json.loads(response.choices[0].message.content), None
+
+        # --- OPTION B: GEMINI 1.5 PRO (High Creativity) ---
+        elif model_choice == "Gemini 1.5 Pro":
+            if not GEMINI_AVAILABLE: return None, "Gemini API Key missing in secrets."
+            
+            # Gemini handles images differently (requires decoded bytes)
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            img_data = base64.b64decode(base64_image)
+            image_part = {"mime_type": "image/jpeg", "data": img_data}
+            
+            # Force JSON via prompt engineering for Gemini
+            gemini_prompt = prompt + "\n\nIMPORTANT: Return ONLY the raw JSON string. No markdown."
+            
+            response = model.generate_content([gemini_prompt, image_part])
+            
+            # Clean Gemini cleanup (remove ```json ... ```)
+            text_out = response.text
+            if "```json" in text_out:
+                text_out = text_out.split("```json")[1].split("```")[0]
+            elif "```" in text_out:
+                text_out = text_out.split("```")[1].split("```")[0]
+                
+            return json.loads(text_out), None
+
     except Exception as e:
         return None, str(e)
-
+    
+    return None, "Unknown Error"
 # ==========================================
 # 3. MAIN APP
 # ==========================================
@@ -415,15 +460,17 @@ else:
             df_input = pd.read_excel(input_file)
             total_rows = len(df_input)
             
-            # --- NEW: RUN MODE SELECTOR ---
+            # --- MODEL SELECTOR & MODE ---
             st.divider()
-            c_run1, c_run2 = st.columns([2,1])
+            c_run1, c_run2 = st.columns([1, 1])
             with c_run1:
                 run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"], horizontal=True)
-            
+            with c_run2:
+                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 1.5 Pro"], help="GPT-4o is safer. Gemini is more creative.")
+
             if run_mode.startswith("🧪"):
                 df_to_process = df_input.head(3)
-                st.info("Test Mode Active: Processing only first 3 rows. Cost is negligible.")
+                st.info("Test Mode Active: Processing only first 3 rows.")
             else:
                 df_to_process = df_input
                 st.warning(f"Production Mode: Processing all {total_rows} rows.")
@@ -441,7 +488,7 @@ else:
                 current_total = len(df_to_process)
                 
                 for idx, row in df_to_process.iterrows():
-                    status.text(f"Processing {idx+1}/{current_total}")
+                    status.text(f"Processing Row {idx+1}/{current_total} using {model_select}...")
                     progress.progress((idx+1)/current_total)
                     
                     img_url = str(row.get(img_col, "")).strip()
@@ -452,7 +499,20 @@ else:
                         if img_url in cache: ai_data = cache[img_url]
                         else:
                             hints = ", ".join([f"{k}: {v}" for k,v in row.items() if str(v) != "nan" and k != img_col])
-                            ai_data, _ = analyze_image_configured(client, img_url, hints, active_kws, config, selected_mp)
+                            
+                            # --- RETRY LOGIC (Prevents Skipping) ---
+                            attempts = 0
+                            max_retries = 2
+                            while attempts < max_retries:
+                                # Call the NEW Hybrid Function
+                                ai_data, err = analyze_image_hybrid(model_select, client, img_url, hints, active_kws, config, selected_mp)
+                                if ai_data: 
+                                    break # Success
+                                else:
+                                    attempts += 1
+                                    time.sleep(2) # Wait 2s before retry
+                                    print(f"Retry {attempts} for {img_url}: {err}")
+                            
                             if ai_data: cache[img_url] = ai_data
                     
                     new_row = {}
@@ -543,5 +603,6 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
