@@ -654,6 +654,20 @@ else:
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
 
 
+# --- DEBUG: CHECK AVAILABLE GEMINI MODELS ---
+st.sidebar.divider()
+if st.sidebar.button("🛠️ Check Gemini Models"):
+    try:
+        if "GEMINI_API_KEY" not in st.secrets:
+            st.sidebar.error("No Gemini Key in Secrets.")
+        else:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            models = list(genai.list_models())
+            found_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
+            st.sidebar.success(f"Found {len(found_models)} Models!")
+            st.sidebar.json(found_models)
+    except Exception as e:
+        st.sidebar.error(f"Error: {e}")
 
 
 
