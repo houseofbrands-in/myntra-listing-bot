@@ -10,15 +10,15 @@ from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
 import zipfile
 from PIL import Image, ImageOps
-import google.generativeai as genai # NEW
+import google.generativeai as genai
+import difflib # NEW: For fuzzy matching master data
+
 # --- DEPENDENCY CHECK ---
 try:
     from rembg import remove as remove_bg_ai
     REMBG_AVAILABLE = True
 except ImportError as e:
     REMBG_AVAILABLE = False
-    # Only show error if we suspect they want to use it
-    # st.error(f"Note: rembg not installed. {e}") 
 
 st.set_page_config(page_title="HOB OS - V10.5", layout="wide")
 
@@ -44,7 +44,7 @@ def init_connection():
         return None
 
 # --- CACHED DATA FETCHING ---
-@st.cache_data # Refreshes automatically every 60 seconds
+@st.cache_data
 def get_worksheet_data(sheet_name, worksheet_name):
     """Fetch all records from a worksheet and cache them."""
     client = init_connection()
@@ -55,42 +55,41 @@ def get_worksheet_data(sheet_name, worksheet_name):
         return ws.get_all_values()
     except: return []
 
-# Global Constants for Sheet Names
+# Global Constants
 SHEET_NAME = "Agency_OS_Database"
 
-# ... existing auth code ...
+# --- API SETUP ---
 try:
     # OpenAI
     api_key = st.secrets["OPENAI_API_KEY"]
     client = OpenAI(api_key=api_key)
     
-    # Gemini (NEW)
+    # Gemini
     try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        GEMINI_AVAILABLE = True
+        if "GEMINI_API_KEY" in st.secrets:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            GEMINI_AVAILABLE = True
+        else:
+            GEMINI_AVAILABLE = False
     except:
         GEMINI_AVAILABLE = False
 
 except Exception as e:
     st.error(f"❌ Secrets Error: {str(e)}")
     st.stop()
+
 # ==========================================
-# 2. CORE LOGIC & UTILS (OPTIMIZED)
+# 2. CORE LOGIC & UTILS
 # ==========================================
 
 def get_worksheet_object(ws_name):
-    """Helper to get write-access worksheet object (Cannot cache write objects)"""
+    """Helper to get write-access worksheet object"""
     gc = init_connection()
     return gc.open(SHEET_NAME).worksheet(ws_name)
 
 def check_login(username, password):
-    # Use cached data instead of API call
     rows = get_worksheet_data(SHEET_NAME, "Users")
-    # Skip header row [0] usually, assuming row 1 is headers
     if not rows: return False, None
-    
-    # Simple parsing assuming headers: Username, Password, Role
-    # Find index of columns if needed, or assume order 0, 1, 2
     for row in rows[1:]: 
         if len(row) >= 3:
             if str(row[0]).strip() == username and str(row[1]).strip() == password:
@@ -100,12 +99,10 @@ def check_login(username, password):
 def create_user(username, password, role):
     try:
         ws = get_worksheet_object("Users")
-        # Check cache first to avoid duplicates without API call
         existing = [r[0] for r in get_worksheet_data(SHEET_NAME, "Users")]
         if username in existing: return False, "User exists"
-        
         ws.append_row([username, password, role])
-        st.cache_data.clear() # Clear cache so next read sees new user
+        st.cache_data.clear()
         return True, "Created"
     except Exception as e: return False, str(e)
 
@@ -115,7 +112,7 @@ def delete_user(username):
         cell = ws.find(username)
         if cell: 
             ws.delete_rows(cell.row)
-            st.cache_data.clear() # Clear cache
+            st.cache_data.clear()
             return True
         return False
     except: return False
@@ -129,7 +126,6 @@ def get_all_users():
 
 def get_categories_for_marketplace(marketplace):
     rows = get_worksheet_data(SHEET_NAME, "Configs")
-    # Row format: [Marketplace, Category, JSON]
     cats = [row[1] for row in rows if len(row) > 1 and row[0] == marketplace]
     return list(set([c for c in cats if c and c != "Category"]))
 
@@ -137,23 +133,15 @@ def save_config(marketplace, category, data):
     try:
         ws = get_worksheet_object("Configs")
         json_str = json.dumps(data)
-        
-        # We must find the row index physically
-        cell = None
-        try:
-            # Try to find purely by string search (risky if duplicates) or iterate
-            # Safe way: iterate rows to find match
-            all_vals = ws.get_all_values()
-            for i, row in enumerate(all_vals):
-                if len(row) > 1 and row[0] == marketplace and row[1] == category:
-                    ws.update_cell(i + 1, 3, json_str)
-                    st.cache_data.clear()
-                    return True
-            # If not found, append
-            ws.append_row([marketplace, category, json_str])
-            st.cache_data.clear()
-            return True
-        except: return False
+        all_vals = ws.get_all_values()
+        for i, row in enumerate(all_vals):
+            if len(row) > 1 and row[0] == marketplace and row[1] == category:
+                ws.update_cell(i + 1, 3, json_str)
+                st.cache_data.clear()
+                return True
+        ws.append_row([marketplace, category, json_str])
+        st.cache_data.clear()
+        return True
     except: return False
 
 def load_config(marketplace, category):
@@ -166,7 +154,6 @@ def load_config(marketplace, category):
 def delete_config(marketplace, category):
     try:
         ws = get_worksheet_object("Configs")
-        # Need to find row index to delete
         all_vals = ws.get_all_values()
         for i, row in enumerate(all_vals):
             if len(row) > 1 and row[0] == marketplace and row[1] == category:
@@ -180,7 +167,6 @@ def save_seo(marketplace, category, keywords_list):
     try:
         ws = get_worksheet_object("SEO_Data")
         kw_string = ", ".join([str(k).strip() for k in keywords_list if str(k).strip()])
-        
         all_vals = ws.get_all_values()
         for i, row in enumerate(all_vals):
             if len(row) > 1 and row[0] == marketplace and row[1] == category:
@@ -198,6 +184,7 @@ def get_seo(marketplace, category):
         if len(row) > 2 and row[0] == marketplace and row[1] == category:
             return row[2]
     return ""
+
 def parse_master_data(file):
     df = pd.read_excel(file)
     valid_options = {}
@@ -206,6 +193,7 @@ def parse_master_data(file):
         if len(options) > 0: valid_options[col] = options
     return valid_options
 
+# --- ROBUST IMAGE DOWNLOADER ---
 def encode_image_from_url(url):
     try:
         if pd.isna(url) or str(url).strip() == "": 
@@ -217,12 +205,12 @@ def encode_image_from_url(url):
         if "dropbox.com" in url:
             url = url.replace("?dl=0", "").replace("&dl=0", "") + ("&dl=1" if "?" in url else "?dl=1")
         
-        # Google Drive Fix (Convert View links to Export links)
+        # Google Drive Fix
         if "drive.google.com" in url and "/view" in url:
             file_id = url.split("/d/")[1].split("/")[0]
             url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
-        # --- THE CRITICAL FIX: USER-AGENT HEADERS ---
+        # --- USER AGENT FIX (Bypasses Myntra/Amazon blocking) ---
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
             "Referer": "https://www.google.com/"
@@ -237,7 +225,26 @@ def encode_image_from_url(url):
             
     except Exception as e: 
         return None, f"Network Error: {str(e)}"
-# --- IMAGE PROCESSOR ---
+
+# --- MASTER DATA ENFORCER (NEW) ---
+def enforce_master_data(value, options):
+    """Forces AI value to closest match in Master Data list."""
+    if not value: return ""
+    str_val = str(value).strip()
+    
+    # 1. Exact Match
+    for opt in options:
+        if str(opt).lower() == str_val.lower():
+            return opt 
+            
+    # 2. Fuzzy Match
+    matches = difflib.get_close_matches(str_val, [str(o) for o in options], n=1, cutoff=0.6)
+    if matches:
+        return matches[0]
+        
+    return ""
+
+# --- IMAGE PROCESSOR (TOOLS) ---
 def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
     try:
         img = Image.open(image_file)
@@ -268,13 +275,12 @@ def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
             return final_bg, None
     except Exception as e: return None, str(e)
 
-# --- AI LOGIC (UPDATED V10.5) ---
+# --- AI LOGIC (HYBRID ENGINE V2) ---
 def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
-    # 1. Prepare Image
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # 2. Prepare Context
+    # Prepare Master Data context
     relevant_options = {}
     ai_target_headers = []
     for col, settings in config['column_mapping'].items():
@@ -285,55 +291,59 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
                     relevant_options[col] = opts
                     break
 
-    # 3. Prompt
     seo_section = f"SEO KEYWORDS: {keywords}" if keywords else ""
+    
     mp_rules = ""
     if marketplace.lower() == "amazon":
         mp_rules = """
-        - Bullet Points: 5 bullets. START each with a BOLD header (e.g., <b>Soft Fabric:</b>).
-        - Title: [Brand] + [Department] + [Material] + [Key Feature] + [Color].
+        - Bullet Points: 5 distinct selling points. Start each with a BOLD header (e.g., <b>Soft Fabric:</b>).
+        - Title: [Brand] + [Department] + [Material] + [Pattern] + [Style].
         """
     elif marketplace.lower() == "myntra":
-        mp_rules = "- Title: Short, punchy, Brand + Category + Style."
+        mp_rules = "- Title: Brand + Gender + Style + Category (Short & Punchy)."
 
     prompt = f"""
-    You are a Fashion Data Expert for {marketplace}.
-    TASK: Generate JSON for: {ai_target_headers}
+    You are a Data Validation Bot for {marketplace}. 
+    TASK: Extract attributes for these columns: {ai_target_headers}
     CONTEXT: {user_hints}
     {seo_section}
     {mp_rules}
     
-    INSTRUCTIONS:
-    1. TECHNICAL SPECS: Use STRICT matches from: {json.dumps(relevant_options)}.
-    2. CREATIVE TEXT: Be evocative, sensory, and sales-driven.
-    3. OUTPUT: JSON only.
+    CRITICAL MASTER DATA RULES:
+    You have been given strict lists of allowed values. 
+    {json.dumps(relevant_options)}
+    
+    1. IF A COLUMN HAS A LIST: You MUST pick one value from that list EXACTLY. 
+       - If image shows "No Sleeves" but list says "Sleeveless", write "Sleeveless".
+       - Do not invent new words. 
+       
+    2. CREATIVE COLUMNS (Title, Description): 
+       - Write enticing, sales-focused copy.
+       - Use keywords naturally.
+       
+    OUTPUT: JSON Only.
     """
 
-    # 4. Engine Switching
     try:
-        # --- OPTION A: GPT-4o ---
+        # --- GPT-4o ---
         if "GPT" in model_choice:
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a JSON-only fashion assistant."},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": prompt}, 
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ]}
+                    {"role": "system", "content": "You are a JSON-only data assistant."},
+                    {"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
                 ],
                 response_format={"type": "json_object"},
                 max_tokens=1500
             )
             return json.loads(response.choices[0].message.content), None
 
-        # --- OPTION B: GEMINI 1.5 FLASH (Updated) ---
+        # --- GEMINI 2.5 FLASH (UPDATED) ---
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
             
-            # UPDATED MODEL NAME HERE
+            # Using version 2.5 as discovered
             model = genai.GenerativeModel('gemini-2.5-flash') 
-            
             img_data = base64.b64decode(base64_image)
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
@@ -341,18 +351,13 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             response = model.generate_content([gemini_prompt, image_part])
             
             text_out = response.text
-            # Clean Markdown
-            if "```json" in text_out:
-                text_out = text_out.split("```json")[1].split("```")[0]
-            elif "```" in text_out:
-                text_out = text_out.split("```")[1].split("```")[0]
-                
+            if "```json" in text_out: text_out = text_out.split("```json")[1].split("```")[0]
+            elif "```" in text_out: text_out = text_out.split("```")[1].split("```")[0]
             return json.loads(text_out), None
 
-    except Exception as e:
-        return None, str(e)
-    
+    except Exception as e: return None, str(e)
     return None, "Unknown Error"
+
 # ==========================================
 # 3. MAIN APP
 # ==========================================
@@ -371,7 +376,7 @@ if not st.session_state.logged_in:
                     st.rerun()
                 else: st.error("Invalid Credentials")
 else:
-    # --- SIDEBAR POLISH (V10.5) ---
+    # --- SIDEBAR ---
     st.sidebar.title("🌍 HOB OS")
     st.sidebar.caption(f"User: {st.session_state.username} | Role: {st.session_state.user_role}")
     if st.sidebar.button("Log Out"): st.session_state.logged_in = False; st.rerun()
@@ -380,14 +385,8 @@ else:
     selected_mp = st.sidebar.selectbox("Marketplace", ["Myntra", "Flipkart", "Ajio", "Amazon", "Nykaa"])
     if st.sidebar.button("🔄 Refresh Data"): st.rerun()
     
-    # Help Guide
-    with st.sidebar.expander("ℹ️ Quick Guide"):
-        st.markdown("""
-        **1. Setup:** Map your Excel columns to AI logic.
-        **2. SEO:** Inject keywords from Ads.
-        **3. Run:** Upload data & Generate.
-        **4. Tools:** Resize images for Marketplace.
-        """)
+    with st.sidebar.expander("ℹ️ Guide"):
+        st.markdown("**1. Setup:** Map Columns.\n**2. Run:** Generate Listing.\n**3. Tools:** Process Images.")
 
     mp_cats = get_categories_for_marketplace(selected_mp)
     
@@ -453,7 +452,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-   # --- TAB 3: RUN (V10.5 HYBRID ENGINE) ---
+    # --- TAB 3: RUN (V10.5 UPDATED) ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
         
@@ -479,7 +478,7 @@ else:
             df_input = pd.read_excel(input_file)
             total_rows = len(df_input)
             
-            # --- 1. MODEL & COLUMN SELECTION ---
+            # --- MODEL & COLUMN SELECTION ---
             st.divider()
             c_run1, c_run2, c_run3 = st.columns([1, 1, 1])
             with c_run1:
@@ -487,7 +486,7 @@ else:
             with c_run2:
                 model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash"])
             with c_run3:
-                # LET USER SELECT THE IMAGE COLUMN MANUALLY
+                # Manual Column Selector (Fixes '42' error)
                 potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
                 default_idx = df_input.columns.get_loc(potential_cols[0]) if potential_cols else 0
                 img_col = st.selectbox("Select Image URL Column", df_input.columns, index=default_idx)
@@ -513,14 +512,12 @@ else:
                 mapping = config['column_mapping']
                 current_total = len(df_to_process)
                 
-                # 2. Processing Loop
+                # --- PROCESSING LOOP ---
                 for idx, row in df_to_process.iterrows():
                     status.text(f"Processing Row {idx+1}/{current_total} ({model_select})...")
                     progress.progress((idx+1)/current_total)
                     
                     img_url = str(row.get(img_col, "")).strip()
-                    
-                    # Debug print to confirm we have the right URL now
                     st.caption(f"🔎 Row {idx+1} URL: {img_url}")
 
                     ai_data = None
@@ -529,7 +526,6 @@ else:
                     needs_ai = any(m['source']=='AI' for m in mapping.values())
                     
                     if needs_ai:
-                        # Skip empty URLs immediately
                         if not img_url or img_url.lower() == "nan":
                             error_log.warning(f"⚠️ Row {idx+1}: Image URL is empty.")
                         elif img_url in cache: 
@@ -552,10 +548,11 @@ else:
                             else:
                                 error_log.error(f"❌ FAILED [Row {idx+1}]: {last_error}")
                     
-                    # 3. Map Data
+                    # --- MAPPING & ENFORCEMENT ---
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
+                        
                         if rule['source'] == 'INPUT':
                             val = ""
                             if col in df_input.columns: val = row[col]
@@ -563,22 +560,34 @@ else:
                                 for ic in df_input.columns:
                                     if ic.lower() in col.lower(): val = row[ic]; break
                             new_row[col] = val
+
                         elif rule['source'] == 'FIXED': 
                             new_row[col] = rule['value']
+
                         elif rule['source'] == 'AI':
+                            ai_val = ""
                             if ai_data:
-                                found = False
                                 if col in ai_data: 
-                                    new_row[col] = ai_data[col]; found = True
+                                    ai_val = ai_data[col]
                                 else:
                                     clean_col = col.lower().replace(" ", "").replace("_", "")
                                     for k, v in ai_data.items():
                                         clean_k = k.lower().replace(" ", "").replace("_", "")
                                         if clean_k in clean_col or clean_col in clean_k:
-                                            new_row[col] = v; found = True; break
-                                if not found: new_row[col] = "" 
+                                            ai_val = v; break
+                            
+                            # *** ENFORCE MASTER DATA ***
+                            master_list = []
+                            for master_col, opts in config['master_data'].items():
+                                if master_col.lower() in col.lower() or col.lower() in master_col.lower():
+                                    master_list = opts
+                                    break
+                            
+                            if master_list and ai_val:
+                                new_row[col] = enforce_master_data(ai_val, master_list)
                             else:
-                                new_row[col] = "" 
+                                new_row[col] = ai_val
+
                         else: 
                             new_row[col] = ""
                             
@@ -590,7 +599,8 @@ else:
                 
                 st.success("✅ Done!")
                 st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
-                # --- TAB 4: TOOLS ---
+
+    # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🖼️ Bulk Image Processor")
         st.markdown("**Features:** Size Control, White Bars/Padding, AI Background Removal.")
@@ -652,29 +662,3 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
-
-# --- DEBUG: CHECK AVAILABLE GEMINI MODELS ---
-st.sidebar.divider()
-if st.sidebar.button("🛠️ Check Gemini Models"):
-    try:
-        if "GEMINI_API_KEY" not in st.secrets:
-            st.sidebar.error("No Gemini Key in Secrets.")
-        else:
-            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            models = list(genai.list_models())
-            found_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-            st.sidebar.success(f"Found {len(found_models)} Models!")
-            st.sidebar.json(found_models)
-    except Exception as e:
-        st.sidebar.error(f"Error: {e}")
-
-
-
-
-
-
-
-
-
-
