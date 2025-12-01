@@ -439,10 +439,13 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN (V10.5 SAFETY FEATURES) ---
+   # --- TAB 3: RUN (V10.5 HYBRID ENGINE) ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
-        if not mp_cats: st.warning("No categories configured yet."); st.stop()
+        
+        if not mp_cats: 
+            st.warning("No categories configured yet.")
+            st.stop()
         
         run_cat = st.selectbox("Select Category", mp_cats, key="run")
         if run_cat:
@@ -450,13 +453,14 @@ else:
             if config:
                 required_cols = ["Image URL"] + [col for col, rule in config.get('column_mapping', {}).items() if rule.get('source') == 'INPUT']
                 output = BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: pd.DataFrame(columns=required_cols).to_excel(writer, index=False)
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: 
+                    pd.DataFrame(columns=required_cols).to_excel(writer, index=False)
                 st.download_button("📥 Download Input Template", output.getvalue(), file_name=f"{selected_mp}_{run_cat}_Template.xlsx")
 
         active_kws = get_seo(selected_mp, run_cat)
         input_file = st.file_uploader("Upload Input Data (filled template)", type=["xlsx"], key="run_in")
         
-       if input_file:
+        if input_file:
             df_input = pd.read_excel(input_file)
             total_rows = len(df_input)
             
@@ -487,9 +491,11 @@ else:
                 
                 progress = st.progress(0)
                 status = st.empty()
-                error_log = st.empty() # New container for errors
+                error_log = st.empty() 
                 final_rows = []
                 cache = {}
+                # Handle case where config might be None if user didn't select category properly
+                if not config: st.error("Config not loaded"); st.stop()
                 mapping = config['column_mapping']
                 current_total = len(df_to_process)
                 
@@ -525,7 +531,6 @@ else:
                             if ai_data: 
                                 cache[img_url] = ai_data
                             else:
-                                # *** DEBUG: SHOW ERROR ***
                                 error_log.error(f"❌ Row {idx+1} Failed: {last_error} | URL: {img_url}")
                     
                     # 3. Map Data to Output Columns
@@ -537,7 +542,6 @@ else:
                             val = ""
                             if col in df_input.columns: val = row[col]
                             else:
-                                # Fuzzy match input columns
                                 for ic in df_input.columns:
                                     if ic.lower() in col.lower(): val = row[ic]; break
                             new_row[col] = val
@@ -548,12 +552,10 @@ else:
                         elif rule['source'] == 'AI':
                             if ai_data:
                                 found = False
-                                # Try exact match
                                 if col in ai_data: 
                                     new_row[col] = ai_data[col]
                                     found = True
                                 else:
-                                    # Try fuzzy match (ignore case/spaces)
                                     clean_col = col.lower().replace(" ", "").replace("_", "")
                                     for k, v in ai_data.items():
                                         clean_k = k.lower().replace(" ", "").replace("_", "")
@@ -575,7 +577,7 @@ else:
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
                     pd.DataFrame(final_rows).to_excel(writer, index=False)
                 
-                st.success("✅ Done! Check above if any red errors appeared.")
+                st.success("✅ Done!")
                 st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
                 # --- TAB 4: TOOLS ---
     with tabs[3]:
@@ -639,6 +641,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
