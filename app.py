@@ -373,8 +373,8 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             elif "```" in text_out: text_out = text_out.split("```")[1].split("```")[0]
             return json.loads(text_out), None
 
-        # ======================================================
-        # OPTION C: GROQ (LLAMA 3.2 11B VISION)
+       # ======================================================
+        # OPTION C: GROQ (LLAMA 4 SCOUT VISION)
         # ======================================================
         elif "Llama" in model_choice or "Groq" in model_choice:
             if "GROQ_API_KEY" not in st.secrets: return None, "Groq API Key missing in secrets."
@@ -395,8 +395,8 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             """
             
             response = groq_client.chat.completions.create(
-                # UPDATED MODEL ID HERE:
-                model="llama-3.2-11b-vision-preview", 
+                # --- UPDATED MODEL ID (ACTIVE LATE 2025) ---
+                model="meta-llama/llama-4-scout-17b-16e-instruct", 
                 messages=[
                     {
                         "role": "user",
@@ -541,7 +541,7 @@ else:
             with c_run1:
                 run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"])
             with c_run2:
-                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash","Llama 3.2 Vision (Groq 11b)"])
+                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash","Llama 4 Scout (Groq)"])
             with c_run3:
                 # Manual Column Selector (Fixes '42' error)
                 potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
@@ -730,6 +730,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
