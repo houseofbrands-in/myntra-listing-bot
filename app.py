@@ -548,7 +548,18 @@ else:
                 current_total = len(df_to_process)
                 
                 # --- PROCESSING LOOP ---
-                for idx, row in df_to_process.iterrows():
+                for idx, row in df_to_process.iterrows():                  
+                    # --- NEW: SAFETY BRAKE FOR GEMINI ---
+                    # Google Free Tier allows ~15 requests per minute. 
+                    # We wait 5 seconds to stay safe (60s / 12 reqs = safe).
+                    if "Gemini" in model_select:
+                        time.sleep(5) 
+                    # ------------------------------------
+
+                    status.text(f"Processing Row {idx+1}/{current_total} ({model_select})...")
+                    progress.progress((idx+1)/current_total)
+                    
+                    # ... (rest of the code remains the same)
                     status.text(f"Processing Row {idx+1}/{current_total} ({model_select})...")
                     progress.progress((idx+1)/current_total)
                     
@@ -697,4 +708,5 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
