@@ -12,6 +12,8 @@ import zipfile
 from PIL import Image, ImageOps
 import google.generativeai as genai
 import difflib # NEW: For fuzzy matching master data
+# --- IMPORTS TO ADD AT THE VERY TOP OF APP.PY ---
+from groq import Groq # <--- Make sure this is added with other imports
 
 # --- DEPENDENCY CHECK ---
 try:
@@ -275,22 +277,22 @@ def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
             return final_bg, None
     except Exception as e: return None, str(e)
 
-# --- AI LOGIC (HYBRID ENGINE V2) ---# --- AI LOGIC (STRICT GEMINI VERSION) ---
+
+
+# --- AI LOGIC (HYBRID ENGINE V3: GPT + GEMINI + LLAMA) ---
 def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
+    # 1. Prepare Image
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # 1. Sort columns into "Technical" (Strict) vs "Creative" (Free)
+    # 2. Sort columns (Technical vs Creative) to build specific prompts
     tech_cols = []
     creative_cols = []
-    
-    # We build a specific "Menu" for Gemini to read
     gemini_constraints = [] 
-    relevant_options = {} # Keep this for GPT as it likes JSON
+    relevant_options = {} 
     
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
-            # Check if this column has strict Master Data
             master_options = []
             for master_col, opts in config['master_data'].items():
                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
@@ -300,14 +302,14 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             if master_options:
                 tech_cols.append(col)
                 relevant_options[col] = master_options
-                # FORMATTING FOR GEMINI: Explicitly link Column -> Options
+                # Formats for Gemini/Llama
                 gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
             else:
                 creative_cols.append(col)
 
     all_targets = tech_cols + creative_cols
 
-    # 2. Construct Marketplace Rules
+    # 3. Marketplace Rules
     seo_section = f"SEO KEYWORDS: {keywords}" if keywords else ""
     mp_rules = ""
     if marketplace.lower() == "amazon":
@@ -318,10 +320,10 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
     elif marketplace.lower() == "myntra":
         mp_rules = "- Title: Short, punchy, Brand + Category + Style."
 
-    # 3. ENGINE SWITCHING & PROMPTING
+    # 4. ENGINE SWITCHING
     try:
         # ======================================================
-        # OPTION A: GPT-4o (Uses JSON Context - Existing Logic)
+        # OPTION A: GPT-4o (The Gold Standard)
         # ======================================================
         if "GPT" in model_choice:
             prompt = f"""
@@ -351,7 +353,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             return json.loads(response.choices[0].message.content), None
 
         # ======================================================
-        # OPTION B: GEMINI (Uses Explicit Constraint Prompting)
+        # OPTION B: GEMINI 2.5 FLASH (Strict Constraints)
         # ======================================================
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
@@ -360,7 +362,6 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             img_data = base64.b64decode(base64_image)
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
-            # We build the prompt differently for Gemini to force strictness
             gemini_prompt = f"""
             You are a Cataloging Bot for {marketplace}.
             
@@ -368,27 +369,60 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             STEP 2: FILL THE FOLLOWING COLUMNS.
             
             --- TECHNICAL COLUMNS (STRICT SELECTION ONLY) ---
-            For these columns, you are FORBIDDEN from inventing words. You MUST pick from the list provided:
-            
+            You are FORBIDDEN from inventing words. You MUST pick from the list provided:
             {chr(10).join(gemini_constraints)}
             
-            (Rule: If the image shows "No Sleeves" but the list has "Sleeveless", you MUST write "Sleeveless".)
-            
-            --- CREATIVE COLUMNS (MARKETING COPY) ---
-            Target Columns: {creative_cols}
-            Instructions: {mp_rules}
+            --- CREATIVE COLUMNS ---
+            Target: {creative_cols}
+            Rules: {mp_rules}
             {seo_section}
             
-            --- OUTPUT FORMAT ---
-            Return ONLY a valid JSON object containing all requested columns.
+            OUTPUT: Valid JSON only.
             """
             
             response = model.generate_content([gemini_prompt, image_part])
-            
             text_out = response.text
             if "```json" in text_out: text_out = text_out.split("```json")[1].split("```")[0]
             elif "```" in text_out: text_out = text_out.split("```")[1].split("```")[0]
             return json.loads(text_out), None
+
+        # ======================================================
+        # OPTION C: LLAMA 3.2 VISION (Groq - Fast & Free)
+        # ======================================================
+        elif "Llama" in model_choice or "Groq" in model_choice:
+            if "GROQ_API_KEY" not in st.secrets: return None, "Groq API Key missing in secrets."
+            
+            # Init Groq Client specifically for this call
+            groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+            
+            prompt = f"""
+            You are a Fashion AI. Return a JSON object for: {all_targets}.
+            
+            STRICT CONSTRAINTS (You MUST pick from these lists):
+            {json.dumps(relevant_options)}
+            
+            CONTEXT: {user_hints}
+            RULES: {mp_rules}
+            
+            Return JSON ONLY. Do not write 'Here is the JSON'. Just the JSON.
+            """
+            
+            response = groq_client.chat.completions.create(
+                model="llama-3.2-90b-vision-preview", # High performance vision
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]
+                    }
+                ],
+                temperature=0.1, # Low temp for strict data compliance
+                max_tokens=1500,
+                response_format={"type": "json_object"}
+            )
+            return json.loads(response.choices[0].message.content), None
 
     except Exception as e: return None, str(e)
     return None, "Unknown Error"
@@ -519,7 +553,7 @@ else:
             with c_run1:
                 run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"])
             with c_run2:
-                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash"])
+                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash","Llama 3.2 Vision (Groq)"])
             with c_run3:
                 # Manual Column Selector (Fixes '42' error)
                 potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
@@ -708,5 +742,6 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
