@@ -286,11 +286,20 @@ else:
             pot_cols = [c for c in df.columns if "url" in c.lower() or "image" in c.lower()]
             img_col = st.selectbox("Image Column", df.columns, index=df.columns.get_loc(pot_cols[0]) if pot_cols else 0)
 
-            if st.button("Start Smart Generation"):
+           if st.button("Start Smart Generation"):
                 df_proc = df.head(3) if "Test" in mode else df
                 prog = st.progress(0); status = st.empty()
                 out_rows = []
                 
+                # Pre-calculate Master Data Mapping for speed
+                # format: {'Column Name': ['Option1', 'Option2']}
+                col_master_map = {}
+                for h in config['headers']:
+                    for master_col, opts in config['master_data'].items():
+                        if master_col.lower() in h.lower() or h.lower() in master_col.lower():
+                            col_master_map[h] = opts
+                            break
+
                 for i, row in df_proc.iterrows():
                     # Safety Wait
                     if "Gemini" in model: time.sleep(5)
@@ -301,15 +310,37 @@ else:
                     url = str(row.get(img_col, "")).strip()
                     hints = ", ".join([f"{k}:{v}" for k,v in row.items() if k != img_col])
                     
-                    # CALL THE NEW LEARNING FUNCTION
+                    # 1. CALL THE LEARNING AI
                     ai_data, err = analyze_image_with_learning(model, client, url, hints, get_seo(mp, cat), config, mp)
                     
                     new_r = row.to_dict()
+                    
                     if ai_data:
-                        for k, v in ai_data.items():
-                             # Simple map back to headers
-                             for h in config['headers']:
-                                 if k.lower() in h.lower(): new_r[h] = v
+                        # 2. MAP & ENFORCE
+                        for h in config['headers']:
+                            
+                            # Find the matching key in AI data (e.g., AI says 'Pattern', Header is 'Pattern Type')
+                            ai_val = None
+                            
+                            # Try Exact Key Match
+                            if h in ai_data:
+                                ai_val = ai_data[h]
+                            else:
+                                # Try Fuzzy Key Match
+                                for k, v in ai_data.items():
+                                    if k.lower() in h.lower() or h.lower() in k.lower():
+                                        ai_val = v; break
+                            
+                            if ai_val:
+                                # 3. THE POLICE CHECK (Enforce Master Data)
+                                if h in col_master_map:
+                                    # If this column has a dropdown list, FORCE the value to match
+                                    clean_val = enforce_master_data(ai_val, col_master_map[h])
+                                    new_r[h] = clean_val
+                                else:
+                                    # If it's a creative column (Title/Desc), keep AI output
+                                    new_r[h] = ai_val
+                                    
                     out_rows.append(new_r)
 
                 st.success("Done!")
