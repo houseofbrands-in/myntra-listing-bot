@@ -11,9 +11,7 @@ from io import BytesIO
 import zipfile
 from PIL import Image, ImageOps
 import google.generativeai as genai
-import difflib # NEW: For fuzzy matching master data
-# --- IMPORTS TO ADD AT THE VERY TOP OF APP.PY ---
-from groq import Groq # <--- Make sure this is added with other imports
+import difflib 
 
 # --- DEPENDENCY CHECK ---
 try:
@@ -25,7 +23,7 @@ except ImportError as e:
 st.set_page_config(page_title="HOB OS - V10.5", layout="wide")
 
 # ==========================================
-# 1. AUTHENTICATION & DATABASE CONNECT (CACHED)
+# 1. AUTHENTICATION & DATABASE CONNECT
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -212,7 +210,7 @@ def encode_image_from_url(url):
             file_id = url.split("/d/")[1].split("/")[0]
             url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
-        # --- USER AGENT FIX (Bypasses Myntra/Amazon blocking) ---
+        # --- USER AGENT FIX ---
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
             "Referer": "https://www.google.com/"
@@ -228,7 +226,7 @@ def encode_image_from_url(url):
     except Exception as e: 
         return None, f"Network Error: {str(e)}"
 
-# --- MASTER DATA ENFORCER (NEW) ---
+# --- MASTER DATA ENFORCER (STRICT) ---
 def enforce_master_data(value, options):
     """Forces AI value to closest match in Master Data list."""
     if not value: return ""
@@ -277,9 +275,7 @@ def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
             return final_bg, None
     except Exception as e: return None, str(e)
 
-
-
-# --- AI LOGIC (HYBRID ENGINE: GPT + GEMINI + GROQ/LLAMA) ---
+# --- AI LOGIC (GPT + GEMINI) ---
 def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
     # 1. Prepare Image
     base64_image, error = encode_image_from_url(image_url)
@@ -302,7 +298,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             if master_options:
                 tech_cols.append(col)
                 relevant_options[col] = master_options
-                # Format for Gemini/Llama
+                # Format for Gemini strictness
                 gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
             else:
                 creative_cols.append(col)
@@ -332,6 +328,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             CONTEXT: {user_hints} {seo_section} {mp_rules}
             STRICT DATA RULES: {json.dumps(relevant_options)}
             """
+            
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -372,45 +369,6 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             if "```json" in text_out: text_out = text_out.split("```json")[1].split("```")[0]
             elif "```" in text_out: text_out = text_out.split("```")[1].split("```")[0]
             return json.loads(text_out), None
-
-       # ======================================================
-        # OPTION C: GROQ (LLAMA 4 SCOUT VISION)
-        # ======================================================
-        elif "Llama" in model_choice or "Groq" in model_choice:
-            if "GROQ_API_KEY" not in st.secrets: return None, "Groq API Key missing in secrets."
-            
-            # Init Groq Client
-            groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            
-            prompt = f"""
-            You are a Fashion AI. Return a JSON object for: {all_targets}.
-            
-            STRICT CONSTRAINTS (You MUST pick from these lists):
-            {json.dumps(relevant_options)}
-            
-            CONTEXT: {user_hints}
-            RULES: {mp_rules}
-            
-            Return JSON ONLY. Do not write 'Here is the JSON'. Just the JSON.
-            """
-            
-            response = groq_client.chat.completions.create(
-                # --- UPDATED MODEL ID (ACTIVE LATE 2025) ---
-                model="meta-llama/llama-4-scout-17b-16e-instruct", 
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                        ]
-                    }
-                ],
-                temperature=0.1, 
-                max_tokens=1500,
-                response_format={"type": "json_object"}
-            )
-            return json.loads(response.choices[0].message.content), None
 
     except Exception as e: return None, str(e)
     return None, "Unknown Error"
@@ -509,7 +467,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN (V10.5 UPDATED) ---
+    # --- TAB 3: RUN (V10.5 CLEAN) ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
         
@@ -534,204 +492,3 @@ else:
         if input_file:
             df_input = pd.read_excel(input_file)
             total_rows = len(df_input)
-            
-            # --- MODEL & COLUMN SELECTION ---
-            st.divider()
-            c_run1, c_run2, c_run3 = st.columns([1, 1, 1])
-            with c_run1:
-                run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"])
-            with c_run2:
-                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash","Llama 4 Scout (Groq)"])
-            with c_run3:
-                # Manual Column Selector (Fixes '42' error)
-                potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
-                default_idx = df_input.columns.get_loc(potential_cols[0]) if potential_cols else 0
-                img_col = st.selectbox("Select Image URL Column", df_input.columns, index=default_idx)
-
-            if run_mode.startswith("🧪"):
-                df_to_process = df_input.head(3)
-                st.info("Test Mode: Processing first 3 rows only.")
-            else:
-                df_to_process = df_input
-                st.warning(f"Production Mode: Processing {total_rows} rows.")
-
-            est_cost = len(df_to_process) * 0.02
-            st.metric("Estimated Cost", f"${est_cost:.2f}")
-
-            if st.button("▶️ Start Generation"):
-                progress = st.progress(0)
-                status = st.empty()
-                error_log = st.empty() 
-                final_rows = []
-                cache = {}
-                
-                if not config: st.error("Config not loaded"); st.stop()
-                mapping = config['column_mapping']
-                current_total = len(df_to_process)
-                
-                # --- PROCESSING LOOP ---
-                for idx, row in df_to_process.iterrows():                  
-                    # --- NEW: SAFETY BRAKE FOR GEMINI ---
-                    # Google Free Tier allows ~15 requests per minute. 
-                    # We wait 5 seconds to stay safe (60s / 12 reqs = safe).
-                    if "Gemini" in model_select:
-                        time.sleep(5) 
-                    # ------------------------------------
-
-                    status.text(f"Processing Row {idx+1}/{current_total} ({model_select})...")
-                    progress.progress((idx+1)/current_total)
-                    
-                    # ... (rest of the code remains the same)
-                    status.text(f"Processing Row {idx+1}/{current_total} ({model_select})...")
-                    progress.progress((idx+1)/current_total)
-                    
-                    img_url = str(row.get(img_col, "")).strip()
-                    st.caption(f"🔎 Row {idx+1} URL: {img_url}")
-
-                    ai_data = None
-                    last_error = "Unknown Error"
-                    
-                    needs_ai = any(m['source']=='AI' for m in mapping.values())
-                    
-                    if needs_ai:
-                        if not img_url or img_url.lower() == "nan":
-                            error_log.warning(f"⚠️ Row {idx+1}: Image URL is empty.")
-                        elif img_url in cache: 
-                            ai_data = cache[img_url]
-                        else:
-                            hints = ", ".join([f"{k}: {v}" for k,v in row.items() if str(v) != "nan" and k != img_col])
-                            
-                            attempts = 0
-                            max_retries = 2
-                            while attempts < max_retries:
-                                ai_data, last_error = analyze_image_hybrid(model_select, client, img_url, hints, active_kws, config, selected_mp)
-                                if ai_data: 
-                                    break 
-                                else:
-                                    attempts += 1
-                                    time.sleep(1) 
-                            
-                            if ai_data: 
-                                cache[img_url] = ai_data
-                            else:
-                                error_log.error(f"❌ FAILED [Row {idx+1}]: {last_error}")
-                    
-                    # --- MAPPING & ENFORCEMENT ---
-                    new_row = {}
-                    for col in config['headers']:
-                        rule = mapping.get(col, {'source': 'BLANK'})
-                        
-                        if rule['source'] == 'INPUT':
-                            val = ""
-                            if col in df_input.columns: val = row[col]
-                            else:
-                                for ic in df_input.columns:
-                                    if ic.lower() in col.lower(): val = row[ic]; break
-                            new_row[col] = val
-
-                        elif rule['source'] == 'FIXED': 
-                            new_row[col] = rule['value']
-
-                        elif rule['source'] == 'AI':
-                            ai_val = ""
-                            if ai_data:
-                                if col in ai_data: 
-                                    ai_val = ai_data[col]
-                                else:
-                                    clean_col = col.lower().replace(" ", "").replace("_", "")
-                                    for k, v in ai_data.items():
-                                        clean_k = k.lower().replace(" ", "").replace("_", "")
-                                        if clean_k in clean_col or clean_col in clean_k:
-                                            ai_val = v; break
-                            
-                            # *** ENFORCE MASTER DATA ***
-                            master_list = []
-                            for master_col, opts in config['master_data'].items():
-                                if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                                    master_list = opts
-                                    break
-                            
-                            if master_list and ai_val:
-                                new_row[col] = enforce_master_data(ai_val, master_list)
-                            else:
-                                new_row[col] = ai_val
-
-                        else: 
-                            new_row[col] = ""
-                            
-                    final_rows.append(new_row)
-                
-                output_gen = BytesIO()
-                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
-                    pd.DataFrame(final_rows).to_excel(writer, index=False)
-                
-                st.success("✅ Done!")
-                st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
-
-    # --- TAB 4: TOOLS ---
-    with tabs[3]:
-        st.header("🖼️ Bulk Image Processor")
-        st.markdown("**Features:** Size Control, White Bars/Padding, AI Background Removal.")
-        
-        c_tool1, c_tool2 = st.columns(2)
-        with c_tool1:
-            target_w = st.number_input("Width (px)", value=1000, step=100)
-            target_h = st.number_input("Height (px)", value=1000, step=100)
-        with c_tool2:
-            resize_mode = st.selectbox("Resize Mode", [
-                "Scale & Pad (White Bars)", 
-                "Resize Only (No Padding)", 
-                "Stretch to Target (Distort)"
-            ])
-            remove_bg = st.checkbox("Remove Background (AI)", help="Required for Amazon Main Image.")
-            if remove_bg and not REMBG_AVAILABLE:
-                st.error("❌ 'rembg' library not installed. Add 'rembg' and 'onnxruntime' to requirements.txt")
-
-        tool_files = st.file_uploader("Upload Images", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True)
-        
-        if tool_files and st.button("Process Images"):
-            zip_buffer = BytesIO()
-            prog_bar = st.progress(0)
-            
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for i, f in enumerate(tool_files):
-                    processed, err = process_image_advanced(f, target_w, target_h, resize_mode, remove_bg)
-                    if processed:
-                        img_byte_arr = BytesIO()
-                        processed.save(img_byte_arr, format='JPEG', quality=95)
-                        fname = f.name.rsplit('.', 1)[0] + "_processed.jpg"
-                        zf.writestr(fname, img_byte_arr.getvalue())
-                    else: st.warning(f"Failed {f.name}: {err}")
-                    prog_bar.progress((i+1)/len(tool_files))
-            
-            st.success("Complete!")
-            st.download_button("⬇️ Download ZIP", zip_buffer.getvalue(), file_name="Processed_Images.zip", mime="application/zip")
-
-    # --- ADMIN TABS ---
-    if st.session_state.user_role.lower() == "admin":
-        with tabs[4]:
-            st.header("Manage Configs")
-            to_del = st.selectbox("Delete", [""]+mp_cats)
-            if to_del and st.button("Delete Config"):
-                delete_config(selected_mp, to_del); st.success("Deleted"); time.sleep(1); st.rerun()
-
-        with tabs[5]:
-            st.header("👥 Admin Console")
-            st.dataframe(pd.DataFrame(get_all_users()))
-            c_add1, c_add2 = st.columns(2)
-            with c_add1:
-                with st.form("add_user"):
-                    new_u = st.text_input("Username"); new_p = st.text_input("Password"); new_r = st.selectbox("Role", ["user", "admin"])
-                    if st.form_submit_button("Create"):
-                        ok, msg = create_user(new_u, new_p, new_r)
-                        if ok: st.success(msg); time.sleep(1); st.rerun()
-                        else: st.error(msg)
-            with c_add2:
-                u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
-                if st.button("Delete"):
-                    if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
-
-
-
-
