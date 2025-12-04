@@ -279,13 +279,13 @@ def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
 
 
 
-# --- AI LOGIC (HYBRID ENGINE V3: GPT + GEMINI + LLAMA) ---
+# --- AI LOGIC (HYBRID ENGINE: GPT + GEMINI + GROQ/LLAMA) ---
 def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
     # 1. Prepare Image
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # 2. Sort columns (Technical vs Creative) to build specific prompts
+    # 2. Sort columns (Technical vs Creative)
     tech_cols = []
     creative_cols = []
     gemini_constraints = [] 
@@ -302,7 +302,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             if master_options:
                 tech_cols.append(col)
                 relevant_options[col] = master_options
-                # Formats for Gemini/Llama
+                # Format for Gemini/Llama
                 gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
             else:
                 creative_cols.append(col)
@@ -323,24 +323,15 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
     # 4. ENGINE SWITCHING
     try:
         # ======================================================
-        # OPTION A: GPT-4o (The Gold Standard)
+        # OPTION A: GPT-4o (OpenAI)
         # ======================================================
         if "GPT" in model_choice:
             prompt = f"""
             You are a Data Expert for {marketplace}.
             TASK: Generate JSON for: {all_targets}
-            CONTEXT: {user_hints}
-            {seo_section}
-            {mp_rules}
-            
-            STRICT DATA RULES:
-            {json.dumps(relevant_options)}
-            
-            INSTRUCTIONS:
-            1. For technical columns, you MUST select the exact value from the list above.
-            2. For creative columns, use enticing sales language.
+            CONTEXT: {user_hints} {seo_section} {mp_rules}
+            STRICT DATA RULES: {json.dumps(relevant_options)}
             """
-            
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -353,7 +344,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             return json.loads(response.choices[0].message.content), None
 
         # ======================================================
-        # OPTION B: GEMINI 2.5 FLASH (Strict Constraints)
+        # OPTION B: GEMINI 2.5 FLASH (Google)
         # ======================================================
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
@@ -363,19 +354,15 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
             gemini_prompt = f"""
-            You are a Cataloging Bot for {marketplace}.
+            Cataloging Bot for {marketplace}.
             
-            STEP 1: ANALYZE THE IMAGE.
-            STEP 2: FILL THE FOLLOWING COLUMNS.
-            
-            --- TECHNICAL COLUMNS (STRICT SELECTION ONLY) ---
-            You are FORBIDDEN from inventing words. You MUST pick from the list provided:
+            TECHNICAL COLUMNS (STRICT SELECTION ONLY):
+            You are FORBIDDEN from inventing words. Pick from:
             {chr(10).join(gemini_constraints)}
             
-            --- CREATIVE COLUMNS ---
+            CREATIVE COLUMNS:
             Target: {creative_cols}
-            Rules: {mp_rules}
-            {seo_section}
+            Rules: {mp_rules} {seo_section}
             
             OUTPUT: Valid JSON only.
             """
@@ -387,12 +374,12 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             return json.loads(text_out), None
 
         # ======================================================
-        # OPTION C: LLAMA 3.2 VISION (Groq - Fast & Free)
+        # OPTION C: GROQ (LLAMA 3.2 11B VISION)
         # ======================================================
         elif "Llama" in model_choice or "Groq" in model_choice:
             if "GROQ_API_KEY" not in st.secrets: return None, "Groq API Key missing in secrets."
             
-            # Init Groq Client specifically for this call
+            # Init Groq Client
             groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             
             prompt = f"""
@@ -408,7 +395,8 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             """
             
             response = groq_client.chat.completions.create(
-                model="llama-3.2-90b-vision-preview", # High performance vision
+                # UPDATED MODEL ID HERE:
+                model="llama-3.2-11b-vision-preview", 
                 messages=[
                     {
                         "role": "user",
@@ -418,7 +406,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
                         ]
                     }
                 ],
-                temperature=0.1, # Low temp for strict data compliance
+                temperature=0.1, 
                 max_tokens=1500,
                 response_format={"type": "json_object"}
             )
@@ -553,7 +541,7 @@ else:
             with c_run1:
                 run_mode = st.radio("Processing Mode", ["🧪 Test Run (First 3 Rows)", "🚀 Full Production Run"])
             with c_run2:
-                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash","Llama 3.2 Vision (Groq)"])
+                model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash","Llama 3.2 Vision (Groq 11b)"])
             with c_run3:
                 # Manual Column Selector (Fixes '42' error)
                 potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
@@ -742,6 +730,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
