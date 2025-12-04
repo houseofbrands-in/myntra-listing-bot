@@ -118,6 +118,47 @@ def encode_image_from_url(url):
         return None, f"Status {response.status_code}"
     except Exception as e: return None, str(e)
 
+# --- MASTER DATA ENFORCER (THE MISSING FUNCTION) ---
+def enforce_master_data(value, options):
+    """Forces AI value to closest match in Master Data list."""
+    if not value: return ""
+    str_val = str(value).strip()
+    val_lower = str_val.lower()
+    
+    # 1. Exact Match
+    for opt in options:
+        if str(opt).lower() == val_lower:
+            return opt 
+
+    # 2. Synonyms (Fashion Logic)
+    synonyms = {
+        "no sleeve": "Sleeveless",
+        "without sleeve": "Sleeveless",
+        "half sleeve": "Short Sleeves",
+        "full sleeve": "Long Sleeves",
+        "print": "Printed",
+        "solid color": "Solid",
+        "plain": "Solid",
+        "button down": "Button",
+        "round": "Round Neck",
+        "v-neck": "V Neck",
+        "collar": "Collared"
+    }
+    for wrong, right in synonyms.items():
+        if wrong in val_lower:
+            for opt in options:
+                if right.lower() in str(opt).lower(): return opt
+
+    # 3. Partial
+    for opt in options:
+        if str(opt).lower() in val_lower: return opt
+
+    # 4. Fuzzy
+    matches = difflib.get_close_matches(str_val, [str(o) for o in options], n=1, cutoff=0.4)
+    if matches: return matches[0]
+        
+    return ""
+
 def analyze_image_with_learning(model_choice, client, image_url, user_hints, keywords, config, marketplace):
     # 1. Prepare Main Image
     base64_main, error = encode_image_from_url(image_url)
@@ -131,7 +172,6 @@ def analyze_image_with_learning(model_choice, client, image_url, user_hints, key
     
     # --- LEARNING INJECTION ---
     visual_references_prompt = ""
-    # We check if we have any visual examples for the columns we are predicting
     
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
@@ -144,7 +184,7 @@ def analyze_image_with_learning(model_choice, client, image_url, user_hints, key
                     examples = get_visual_context(marketplace, config.get('category_name', ''), col)
                     if examples:
                         visual_references_prompt += f"\n\n--- REFERENCE EXAMPLES FOR '{col}' ---\n"
-                        for ex in examples[:3]: # Limit to 3 examples to save tokens
+                        for ex in examples[:3]: # Limit to 3 examples
                             visual_references_prompt += f"- When image looks like [ {ex['desc']} ], the value is '{ex['value']}'.\n"
                     break
             
@@ -168,7 +208,6 @@ def analyze_image_with_learning(model_choice, client, image_url, user_hints, key
     
     *** VISUAL LEARNING MEMORY ***
     {visual_references_prompt}
-    (Use these references to distinguish between similar styles like Embroidery/Jacquard/Print).
     
     STRICT DATA RULES:
     {json.dumps(relevant_options)}
@@ -195,7 +234,6 @@ def analyze_image_with_learning(model_choice, client, image_url, user_hints, key
             img_data = base64.b64decode(base64_main)
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
-            # Gemini strict prompt
             gemini_prompt = f"""
             {prompt}
             
@@ -211,7 +249,7 @@ def analyze_image_with_learning(model_choice, client, image_url, user_hints, key
     except Exception as e: return None, str(e)
     return None, "Unknown Error"
 
-# --- HELPER FUNCTIONS (Config/User) ---
+# --- HELPER FUNCTIONS ---
 def load_config(marketplace, category):
     rows = get_worksheet_data(SHEET_NAME, "Configs")
     for row in rows:
@@ -260,19 +298,18 @@ else:
     tabs = st.tabs(["🚀 Run (Smart)", "🧠 Train Brain", "🛠️ Configs"])
 
     # --- TAB 1: SMART RUN ---
-   # --- TAB 1: SMART RUN ---
     with tabs[0]:
         st.header(f"Generate {mp} Listings (With Learning)")
         cat = st.selectbox("Category", mp_cats)
         
-        # Check if we have brain data for this category
+        # Check if we have brain data
         if cat:
             glossary_data = get_worksheet_data(SHEET_NAME, "Visual_Glossary")
             brain_count = sum(1 for r in glossary_data if r[0] == mp and r[1] == cat)
             if brain_count > 0:
                 st.success(f"🧠 Brain Active: Found {brain_count} learning examples for this category.")
             else:
-                st.warning("⚠️ Brain Empty: Use 'Train Brain' tab to teach the AI (e.g., Jacquard vs Embroidery).")
+                st.warning("⚠️ Brain Empty: Use 'Train Brain' tab to teach the AI.")
 
         infile = st.file_uploader("Upload Excel", type=["xlsx"])
         if infile and cat:
@@ -292,7 +329,7 @@ else:
                 prog = st.progress(0); status = st.empty()
                 out_rows = []
                 
-                # Pre-calculate Master Data Mapping for speed
+                # Pre-calculate Master Data Mapping
                 col_master_map = {}
                 if config and 'headers' in config:
                     for h in config['headers']:
@@ -302,7 +339,7 @@ else:
                                 break
 
                 for i, row in df_proc.iterrows():
-                    # Safety Wait
+                    # Safety Wait for Gemini
                     if "Gemini" in model: time.sleep(5)
                     
                     status.text(f"Analyzing Row {i+1}...")
@@ -320,7 +357,6 @@ else:
                         # 2. MAP & ENFORCE
                         for h in config['headers']:
                             ai_val = None
-                            # Try Exact or Fuzzy Key Match to find value in AI output
                             if h in ai_data:
                                 ai_val = ai_data[h]
                             else:
@@ -329,9 +365,8 @@ else:
                                         ai_val = v; break
                             
                             if ai_val:
-                                # 3. THE POLICE CHECK (Enforce Master Data)
+                                # 3. THE POLICE CHECK
                                 if h in col_master_map:
-                                    # Force value to match list (handles "No Sleeve" -> "Sleeveless")
                                     clean_val = enforce_master_data(ai_val, col_master_map[h])
                                     new_r[h] = clean_val
                                 else:
@@ -347,11 +382,10 @@ else:
     # --- TAB 2: TRAIN BRAIN ---
     with tabs[1]:
         st.header("🧠 Teach the AI")
-        st.markdown("Upload examples where the AI gets confused (e.g., Embroidery vs Print).")
+        st.markdown("Upload examples where the AI gets confused.")
         
         t_cat = st.selectbox("Category to Teach", mp_cats, key="t_cat")
         
-        # Load attributes for this category
         if t_cat:
             conf = load_config(mp, t_cat)
             if conf and 'master_data' in conf:
