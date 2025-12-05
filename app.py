@@ -355,7 +355,10 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
     for col, settings in config['column_mapping'].items():
         # Get Max Len if it exists
         max_len = settings.get('max_len', '')
-        limit_txt = f" (MAX LENGTH: {max_len} chars)" if max_len and str(max_len).isdigit() else ""
+        limit_instruction = ""
+        
+        if max_len and str(max_len).isdigit():
+            limit_instruction = f" (MAX LENGTH: {max_len} chars - Write close to this limit)"
         
         if settings['source'] == 'AI':
             # Check for Master Data
@@ -369,46 +372,74 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
                 tech_cols.append(col)
                 relevant_options[col] = master_options
                 gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
-                target_definitions.append(f"{col}") # No limit needed usually for dropdowns
+                target_definitions.append(f"TECHNICAL FIELD '{col}': Pick exact match from strict options.") 
             else:
                 creative_cols.append(col)
-                target_definitions.append(f"{col}{limit_txt}")
+                # Specific instructions for Creative Fields
+                if "desc" in col.lower() or "feature" in col.lower() or "bullet" in col.lower():
+                    style_guide = "Write elaborate, selling copy. Mention fabric feel, fit, and occasion. Use keywords naturally."
+                elif "title" in col.lower() or "name" in col.lower():
+                    style_guide = "Standard professional e-commerce title formatting."
+                else:
+                    style_guide = "Fill accurately based on image."
+                
+                target_definitions.append(f"CREATIVE FIELD '{col}' {limit_instruction}: {style_guide}")
 
-    # 3. Marketplace Rules
+    # 3. Marketplace Rules (Enhanced)
     seo_section = f"SEO KEYWORDS: {keywords}" if keywords else ""
     mp_rules = ""
     if marketplace.lower() == "amazon":
-        mp_rules = "- Bullet Points: 5 bullets. START with BOLD header. - Title: Brand + Dept + Material + Pattern + Style."
+        mp_rules = """
+        - Bullet Points: Write 5 distinct selling points. Start each with a concise BOLD header (e.g., 'Soft Cotton:'). Focus on benefits.
+        - Title: Brand + Department + Material + Pattern + Style + Generic Name.
+        """
+    elif marketplace.lower() == "flipkart":
+        mp_rules = """
+        - Key Features: Write professional, distinct bullet points emphasizing USPs (Unique Selling Propositions).
+        - Description: Write a rich, paragraph-style description. Describe the look, feel, and versatility of the product.
+        - Avoid: "Great product", "Buy now". Use professional terms like "Premium finish", "Durable construction".
+        """
     elif marketplace.lower() == "myntra":
-        mp_rules = "- Title: Short, punchy, Brand + Category + Style."
+        mp_rules = "- Title: Brand + Style + Category. Keep it punchy.\n- Description: Focus on styling tips and material details."
 
     # 4. ENGINE SWITCHING
     try:
         # ======================================================
-        # OPTION A: GPT-4o
+        # OPTION A: GPT-4o (High Quality)
         # ======================================================
         if "GPT" in model_choice:
             prompt = f"""
-            You are a Data Expert for {marketplace}.
-            TASK: Generate JSON for these columns: {target_definitions}
-            CONTEXT: {user_hints} {seo_section} {mp_rules}
-            STRICT DATA RULES: {json.dumps(relevant_options)}
-            IMPORTANT: Adhere strictly to MAX LENGTH limits if specified.
+            You are a Senior E-commerce Copywriter and Data Specialist for {marketplace}.
+            
+            INPUT CONTEXT: {user_hints}
+            {seo_section}
+            MARKETPLACE STYLE GUIDE: {mp_rules}
+            
+            TASK: Generate JSON for the following columns.
+            
+            STRICT DROPDOWN OPTIONS (You MUST pick from these for Technical Fields):
+            {json.dumps(relevant_options)}
+            
+            COLUMN REQUIREMENTS:
+            {chr(10).join(target_definitions)}
+            
+            CRITICAL INSTRUCTION: 
+            For 'Description', 'Key Features', or 'Bullets': Do NOT be brief. Analyze the image visual details (texture, pattern, cut) and write detailed, persuasive content. Fill the available character limit with high-quality information.
             """
             
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a JSON-only assistant."},
+                    {"role": "system", "content": "You are a helpful, detail-oriented e-commerce assistant who outputs only valid JSON."},
                     {"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=1500
+                max_tokens=2000 # Increased token limit for richer descriptions
             )
             return json.loads(response.choices[0].message.content), None
 
         # ======================================================
-        # OPTION B: GEMINI 2.5 FLASH
+        # OPTION B: GEMINI 2.5 FLASH (High Speed)
         # ======================================================
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
@@ -418,14 +449,17 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
             gemini_prompt = f"""
-            Cataloging Bot for {marketplace}.
+            Act as a Senior Cataloging Expert for {marketplace}.
             
-            TECHNICAL COLUMNS (STRICT SELECTION):
+            TECHNICAL COLUMNS (STRICT SELECTION - Do not invent values):
             {chr(10).join(gemini_constraints)}
             
-            CREATIVE COLUMNS (OUTPUT JSON):
-            Targets: {target_definitions}
-            Rules: {mp_rules} {seo_section}
+            CREATIVE COLUMNS (Write Detailed, Sales-Optimized Content):
+            {chr(10).join(target_definitions)}
+            
+            RULES: {mp_rules} {seo_section}
+            
+            OUTPUT: Valid JSON only.
             """
             
             response = model.generate_content([gemini_prompt, image_part])
@@ -816,3 +850,4 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
