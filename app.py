@@ -243,7 +243,29 @@ def enforce_master_data(value, options):
         return matches[0]
         
     return ""
-
+# --- SMART TRUNCATOR (Layer 2 Defense) ---
+def smart_truncate(text, max_length):
+    """
+    Cuts text to limit without splitting words.
+    Example: "Soft Cotton Fab..." -> "Soft Cotton"
+    """
+    if not text: return ""
+    text = str(text).strip()
+    
+    # If already within limit, return as is
+    if len(text) <= max_length:
+        return text
+    
+    # Hard cut to limit
+    truncated = text[:max_length]
+    
+    # If the character AFTER our cut was not a space, we likely cut a word in half.
+    # So we backtrack to the last space in our truncated string.
+    if len(text) > max_length and text[max_length] != " ":
+        if " " in truncated:
+            truncated = truncated.rsplit(" ", 1)[0]
+    
+    return truncated.strip()
 # --- IMAGE PROCESSOR (TOOLS) ---
 def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
     try:
@@ -281,14 +303,22 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # 2. Sort columns (Technical vs Creative)
+    # 2. Sort columns & Inject Limits
     tech_cols = []
     creative_cols = []
     gemini_constraints = [] 
     relevant_options = {} 
     
+    # Prepare detailed target list with limits for the Prompt
+    target_definitions = []
+
     for col, settings in config['column_mapping'].items():
+        # Get Max Len if it exists
+        max_len = settings.get('max_len', '')
+        limit_txt = f" (MAX LENGTH: {max_len} chars)" if max_len and str(max_len).isdigit() else ""
+        
         if settings['source'] == 'AI':
+            # Check for Master Data
             master_options = []
             for master_col, opts in config['master_data'].items():
                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
@@ -298,35 +328,32 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             if master_options:
                 tech_cols.append(col)
                 relevant_options[col] = master_options
-                # Format for Gemini strictness
                 gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
+                target_definitions.append(f"{col}") # No limit needed usually for dropdowns
             else:
                 creative_cols.append(col)
-
-    all_targets = tech_cols + creative_cols
+                target_definitions.append(f"{col}{limit_txt}")
 
     # 3. Marketplace Rules
     seo_section = f"SEO KEYWORDS: {keywords}" if keywords else ""
     mp_rules = ""
     if marketplace.lower() == "amazon":
-        mp_rules = """
-        - Bullet Points: 5 bullets. START each with a BOLD header (e.g., <b>Soft Fabric:</b>).
-        - Title: [Brand] + [Department] + [Material] + [Pattern] + [Style].
-        """
+        mp_rules = "- Bullet Points: 5 bullets. START with BOLD header. - Title: Brand + Dept + Material + Pattern + Style."
     elif marketplace.lower() == "myntra":
         mp_rules = "- Title: Short, punchy, Brand + Category + Style."
 
     # 4. ENGINE SWITCHING
     try:
         # ======================================================
-        # OPTION A: GPT-4o (OpenAI)
+        # OPTION A: GPT-4o
         # ======================================================
         if "GPT" in model_choice:
             prompt = f"""
             You are a Data Expert for {marketplace}.
-            TASK: Generate JSON for: {all_targets}
+            TASK: Generate JSON for these columns: {target_definitions}
             CONTEXT: {user_hints} {seo_section} {mp_rules}
             STRICT DATA RULES: {json.dumps(relevant_options)}
+            IMPORTANT: Adhere strictly to MAX LENGTH limits if specified.
             """
             
             response = client.chat.completions.create(
@@ -341,7 +368,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             return json.loads(response.choices[0].message.content), None
 
         # ======================================================
-        # OPTION B: GEMINI 2.5 FLASH (Google)
+        # OPTION B: GEMINI 2.5 FLASH
         # ======================================================
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
@@ -353,15 +380,12 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             gemini_prompt = f"""
             Cataloging Bot for {marketplace}.
             
-            TECHNICAL COLUMNS (STRICT SELECTION ONLY):
-            You are FORBIDDEN from inventing words. Pick from:
+            TECHNICAL COLUMNS (STRICT SELECTION):
             {chr(10).join(gemini_constraints)}
             
-            CREATIVE COLUMNS:
-            Target: {creative_cols}
+            CREATIVE COLUMNS (OUTPUT JSON):
+            Targets: {target_definitions}
             Rules: {mp_rules} {seo_section}
-            
-            OUTPUT: Valid JSON only.
             """
             
             response = model.generate_content([gemini_prompt, image_part])
@@ -434,22 +458,75 @@ else:
         if template_file: headers = pd.read_excel(template_file).columns.tolist()
         if master_file: master_options = parse_master_data(master_file)
 
-        if headers:
+       if headers:
             st.divider()
+            # Construct DataFrame for Editor
             if not default_mapping:
                 for h in headers:
                     src = "Leave Blank"; h_low = h.lower()
                     if "image" in h_low or "sku" in h_low: src = "Input Excel"
                     elif h in master_options or "name" in h_low or "desc" in h_low: src = "AI Generation"
-                    default_mapping.append({"Column Name": h, "Source": src, "Fixed Value (If Fixed)": ""})
+                    # Default structure now includes Max Len
+                    default_mapping.append({
+                        "Column Name": h, 
+                        "Source": src, 
+                        "Fixed Value": "", 
+                        "Max Chars": "" # New Field
+                    })
+            else:
+                # BACKWARD COMPATIBILITY: Ensure 'Max Chars' key exists if loading old config
+                for item in default_mapping:
+                    if "Max Chars" not in item:
+                        # Map old 'value' key if needed, or set blank
+                        # Note: In save_config we store as 'max_len', in UI we show 'Max Chars'
+                        # We need to correctly map the loaded config back to UI format
+                        pass 
+            
+            # Create a UI-friendly list from the loaded config if it exists
+            ui_data = []
+            if mode == "Edit Existing" and loaded:
+                for col, rule in loaded['column_mapping'].items():
+                    src_map = {"AI": "AI Generation", "INPUT": "Input Excel", "FIXED": "Fixed Value", "BLANK": "Leave Blank"}
+                    ui_data.append({
+                        "Column Name": col,
+                        "Source": src_map.get(rule['source'], "Leave Blank"),
+                        "Fixed Value": rule.get('value', ''),
+                        "Max Chars": rule.get('max_len', '') # Load existing limit
+                    })
+            else:
+                ui_data = default_mapping
 
-            edited_df = st.data_editor(pd.DataFrame(default_mapping), column_config={"Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"])}, hide_index=True, use_container_width=True, height=400)
+            # Configure Columns
+            edited_df = st.data_editor(
+                pd.DataFrame(ui_data),
+                column_config={
+                    "Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"], width="medium"),
+                    "Fixed Value": st.column_config.TextColumn("Fixed Value", width="medium"),
+                    "Max Chars": st.column_config.NumberColumn("Max Chars", min_value=1, max_value=5000, step=1, help="Leave 0 or blank for no limit.", width="small")
+                },
+                hide_index=True,
+                use_container_width=True,
+                height=400
+            )
             
             if st.button("Save Config"):
                 final_map = {}
                 for i, row in edited_df.iterrows():
                     src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
-                    final_map[row['Column Name']] = {"source": src_code, "value": row['Fixed Value (If Fixed)']}
+                    
+                    # Handle Max Len (Convert NaN/None to empty string)
+                    m_len = row['Max Chars']
+                    if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len) == "0":
+                        m_len = ""
+                    else:
+                        m_len = int(m_len)
+
+                    final_map[row['Column Name']] = {
+                        "source": src_code, 
+                        "value": row['Fixed Value'],
+                        "max_len": m_len
+                    }
+                
                 if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
                     st.success("Saved!"); time.sleep(1); st.rerun()
 
@@ -567,33 +644,49 @@ else:
                             else:
                                 error_log.error(f"❌ FAILED [Row {idx+1}]: {last_error}")
                     
-                    # --- MAPPING & ENFORCEMENT ---
+                   # --- MAPPING & ENFORCEMENT ---
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
-                        
+                        final_val = ""
+
                         if rule['source'] == 'INPUT':
-                            val = ""
-                            if col in df_input.columns: val = row[col]
+                            if col in df_input.columns: final_val = row[col]
                             else:
                                 for ic in df_input.columns:
-                                    if ic.lower() in col.lower(): val = row[ic]; break
-                            new_row[col] = val
+                                    if ic.lower() in col.lower(): final_val = row[ic]; break
 
                         elif rule['source'] == 'FIXED': 
-                            new_row[col] = rule['value']
+                            final_val = rule['value']
 
                         elif rule['source'] == 'AI':
-                            ai_val = ""
                             if ai_data:
                                 if col in ai_data: 
-                                    ai_val = ai_data[col]
+                                    final_val = ai_data[col]
                                 else:
                                     clean_col = col.lower().replace(" ", "").replace("_", "")
                                     for k, v in ai_data.items():
                                         clean_k = k.lower().replace(" ", "").replace("_", "")
                                         if clean_k in clean_col or clean_col in clean_k:
-                                            ai_val = v; break
+                                            final_val = v; break
+                            
+                            # 1. Master Data Enforce
+                            master_list = []
+                            for master_col, opts in config['master_data'].items():
+                                if master_col.lower() in col.lower() or col.lower() in master_col.lower():
+                                    master_list = opts
+                                    break
+                            
+                            if master_list and final_val:
+                                final_val = enforce_master_data(final_val, master_list)
+
+                        # --- APPLY DUAL LAYER DEFENSE (SMART TRUNCATION) ---
+                        # Check if this column has a max_len rule
+                        max_len = rule.get('max_len')
+                        if max_len and str(max_len).isdigit() and int(max_len) > 0:
+                            final_val = smart_truncate(final_val, int(max_len))
+
+                        new_row[col] = final_val
                             
                             # *** ENFORCE MASTER DATA ***
                             master_list = []
@@ -681,3 +774,4 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
