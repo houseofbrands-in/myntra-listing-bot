@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     REMBG_AVAILABLE = False
 
-st.set_page_config(page_title="HOB OS - V10.5", layout="wide")
+st.set_page_config(page_title="HOB OS - V10.6", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -243,6 +243,7 @@ def enforce_master_data(value, options):
         return matches[0]
         
     return ""
+
 # --- SMART TRUNCATOR (Layer 2 Defense) ---
 def smart_truncate(text, max_length):
     """
@@ -266,6 +267,7 @@ def smart_truncate(text, max_length):
             truncated = truncated.rsplit(" ", 1)[0]
     
     return truncated.strip()
+
 # --- IMAGE PROCESSOR (TOOLS) ---
 def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
     try:
@@ -296,6 +298,44 @@ def process_image_advanced(image_file, target_w, target_h, mode, do_remove_bg):
             final_bg.paste(img, (left, top), img)
             return final_bg, None
     except Exception as e: return None, str(e)
+
+# --- VISION GUARD (COMPLIANCE CHECKER) ---
+def validate_image_compliance(image_file, marketplace):
+    try:
+        img = Image.open(image_file)
+        w, h = img.size
+        ratio = w / h
+        status = "✅ PASS"
+        issues = []
+
+        # 1. Resolution Check
+        if marketplace == "Amazon":
+            if w < 1000 or h < 1000:
+                issues.append(f"Low Res ({w}x{h} < 1000px)")
+            if not (0.95 <= ratio <= 1.05):
+                issues.append(f"Not Square (Ratio: {ratio:.2f})")
+        
+        elif marketplace == "Myntra":
+            if h < 900:
+                issues.append(f"Low Height ({h} < 900px)")
+            if not (0.65 <= ratio <= 0.85): # Approx 3:4
+                issues.append(f"Wrong Aspect Ratio ({ratio:.2f})")
+
+        # 2. Background Check (Simple Corner Check)
+        if marketplace == "Amazon":
+            img_rgb = img.convert("RGB")
+            corners = [img_rgb.getpixel((0, 0)), img_rgb.getpixel((w-1, 0))]
+            is_white = all(sum(c) > 750 for c in corners) # >750 means very close to 255,255,255
+            if not is_white:
+                issues.append("Background not White")
+
+        if issues:
+            status = "❌ FAIL"
+        
+        return {"Filename": image_file.name, "Status": status, "Issues": ", ".join(issues), "Dimensions": f"{w}x{h}"}
+
+    except Exception as e:
+        return {"Filename": image_file.name, "Status": "⚠️ ERROR", "Issues": str(e), "Dimensions": "N/A"}
 
 # --- AI LOGIC (GPT + GEMINI) ---
 def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
@@ -446,9 +486,6 @@ else:
                     loaded = load_config(selected_mp, edit_cat)
                     if loaded:
                         cat_name = loaded['category_name']; headers = loaded['headers']; master_options = loaded['master_data']
-                        for col, rule in loaded['column_mapping'].items():
-                            src_map = {"AI": "AI Generation", "INPUT": "Input Excel", "FIXED": "Fixed Value", "BLANK": "Leave Blank"}
-                            default_mapping.append({"Column Name": col, "Source": src_map.get(rule['source'], "Leave Blank"), "Fixed Value (If Fixed)": rule['value']})
         else: cat_name = st.text_input(f"New {selected_mp} Category Name")
 
         c1, c2 = st.columns(2)
@@ -458,8 +495,9 @@ else:
         if template_file: headers = pd.read_excel(template_file).columns.tolist()
         if master_file: master_options = parse_master_data(master_file)
 
-       if headers:
+        if headers:
             st.divider()
+            
             # Construct DataFrame for Editor
             if not default_mapping:
                 for h in headers:
@@ -471,16 +509,8 @@ else:
                         "Column Name": h, 
                         "Source": src, 
                         "Fixed Value": "", 
-                        "Max Chars": "" # New Field
+                        "Max Chars": "" 
                     })
-            else:
-                # BACKWARD COMPATIBILITY: Ensure 'Max Chars' key exists if loading old config
-                for item in default_mapping:
-                    if "Max Chars" not in item:
-                        # Map old 'value' key if needed, or set blank
-                        # Note: In save_config we store as 'max_len', in UI we show 'Max Chars'
-                        # We need to correctly map the loaded config back to UI format
-                        pass 
             
             # Create a UI-friendly list from the loaded config if it exists
             ui_data = []
@@ -491,7 +521,7 @@ else:
                         "Column Name": col,
                         "Source": src_map.get(rule['source'], "Leave Blank"),
                         "Fixed Value": rule.get('value', ''),
-                        "Max Chars": rule.get('max_len', '') # Load existing limit
+                        "Max Chars": rule.get('max_len', '') 
                     })
             else:
                 ui_data = default_mapping
@@ -514,7 +544,7 @@ else:
                 for i, row in edited_df.iterrows():
                     src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
                     
-                    # Handle Max Len (Convert NaN/None to empty string)
+                    # Handle Max Len
                     m_len = row['Max Chars']
                     if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len) == "0":
                         m_len = ""
@@ -544,7 +574,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN (V10.5 CLEAN) ---
+    # --- TAB 3: RUN (V10.6 INTEGRATED) ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
         
@@ -606,7 +636,7 @@ else:
                 
                 # --- PROCESSING LOOP ---
                 for idx, row in df_to_process.iterrows():                  
-                    # --- SAFETY BRAKE FOR GEMINI (Rate Limit 15 RPM) ---
+                    # --- SAFETY BRAKE FOR GEMINI ---
                     if "Gemini" in model_select:
                         time.sleep(5) 
 
@@ -644,7 +674,7 @@ else:
                             else:
                                 error_log.error(f"❌ FAILED [Row {idx+1}]: {last_error}")
                     
-                   # --- MAPPING & ENFORCEMENT ---
+                    # --- MAPPING & ENFORCEMENT ---
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
@@ -670,7 +700,7 @@ else:
                                         if clean_k in clean_col or clean_col in clean_k:
                                             final_val = v; break
                             
-                            # 1. Master Data Enforce
+                            # Master Data Enforce
                             master_list = []
                             for master_col, opts in config['master_data'].items():
                                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
@@ -680,28 +710,12 @@ else:
                             if master_list and final_val:
                                 final_val = enforce_master_data(final_val, master_list)
 
-                        # --- APPLY DUAL LAYER DEFENSE (SMART TRUNCATION) ---
-                        # Check if this column has a max_len rule
+                        # --- APPLY SMART TRUNCATION (Max Limit) ---
                         max_len = rule.get('max_len')
                         if max_len and str(max_len).isdigit() and int(max_len) > 0:
                             final_val = smart_truncate(final_val, int(max_len))
 
                         new_row[col] = final_val
-                            
-                            # *** ENFORCE MASTER DATA ***
-                            master_list = []
-                            for master_col, opts in config['master_data'].items():
-                                if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                                    master_list = opts
-                                    break
-                            
-                            if master_list and ai_val:
-                                new_row[col] = enforce_master_data(ai_val, master_list)
-                            else:
-                                new_row[col] = ai_val
-
-                        else: 
-                            new_row[col] = ""
                             
                     final_rows.append(new_row)
                 
@@ -712,44 +726,72 @@ else:
                 st.success("✅ Done!")
                 st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
 
-    # --- TAB 4: TOOLS ---
+    # --- TAB 4: TOOLS (VISION GUARD ADDED) ---
     with tabs[3]:
-        st.header("🖼️ Bulk Image Processor")
-        st.markdown("**Features:** Size Control, White Bars/Padding, AI Background Removal.")
+        st.header("🛠️ Media Tools")
         
-        c_tool1, c_tool2 = st.columns(2)
-        with c_tool1:
-            target_w = st.number_input("Width (px)", value=1000, step=100)
-            target_h = st.number_input("Height (px)", value=1000, step=100)
-        with c_tool2:
-            resize_mode = st.selectbox("Resize Mode", [
-                "Scale & Pad (White Bars)", 
-                "Resize Only (No Padding)", 
-                "Stretch to Target (Distort)"
-            ])
-            remove_bg = st.checkbox("Remove Background (AI)", help="Required for Amazon Main Image.")
-            if remove_bg and not REMBG_AVAILABLE:
-                st.error("❌ 'rembg' library not installed. Add 'rembg' and 'onnxruntime' to requirements.txt")
+        tool_mode = st.radio("Select Tool", ["🖼️ Bulk Processor (Resize/BG Removal)", "🛡️ Vision Guard (Compliance Check)"], horizontal=True)
+        st.divider()
 
-        tool_files = st.file_uploader("Upload Images", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True)
-        
-        if tool_files and st.button("Process Images"):
-            zip_buffer = BytesIO()
-            prog_bar = st.progress(0)
+        if tool_mode == "🖼️ Bulk Processor (Resize/BG Removal)":
+            st.subheader("Bulk Image Processor")
+            c_tool1, c_tool2 = st.columns(2)
+            with c_tool1:
+                target_w = st.number_input("Width (px)", value=1000, step=100)
+                target_h = st.number_input("Height (px)", value=1000, step=100)
+            with c_tool2:
+                resize_mode = st.selectbox("Resize Mode", [
+                    "Scale & Pad (White Bars)", 
+                    "Resize Only (No Padding)", 
+                    "Stretch to Target (Distort)"
+                ])
+                remove_bg = st.checkbox("Remove Background (AI)", help="Required for Amazon Main Image.")
+                if remove_bg and not REMBG_AVAILABLE:
+                    st.error("❌ 'rembg' library not installed.")
+
+            tool_files = st.file_uploader("Upload Images", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True, key="proc_up")
             
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for i, f in enumerate(tool_files):
-                    processed, err = process_image_advanced(f, target_w, target_h, resize_mode, remove_bg)
-                    if processed:
-                        img_byte_arr = BytesIO()
-                        processed.save(img_byte_arr, format='JPEG', quality=95)
-                        fname = f.name.rsplit('.', 1)[0] + "_processed.jpg"
-                        zf.writestr(fname, img_byte_arr.getvalue())
-                    else: st.warning(f"Failed {f.name}: {err}")
-                    prog_bar.progress((i+1)/len(tool_files))
+            if tool_files and st.button("Process Images"):
+                zip_buffer = BytesIO()
+                prog_bar = st.progress(0)
+                
+                with zipfile.ZipFile(zip_buffer, "w") as zf:
+                    for i, f in enumerate(tool_files):
+                        processed, err = process_image_advanced(f, target_w, target_h, resize_mode, remove_bg)
+                        if processed:
+                            img_byte_arr = BytesIO()
+                            processed.save(img_byte_arr, format='JPEG', quality=95)
+                            fname = f.name.rsplit('.', 1)[0] + "_processed.jpg"
+                            zf.writestr(fname, img_byte_arr.getvalue())
+                        else: st.warning(f"Failed {f.name}: {err}")
+                        prog_bar.progress((i+1)/len(tool_files))
+                
+                st.success("Complete!")
+                st.download_button("⬇️ Download ZIP", zip_buffer.getvalue(), file_name="Processed_Images.zip", mime="application/zip")
+
+        elif tool_mode == "🛡️ Vision Guard (Compliance Check)":
+            st.subheader("Marketplace Compliance Audit")
+            st.info("Checks images for Resolution, Aspect Ratio, and White Background compliance.")
             
-            st.success("Complete!")
-            st.download_button("⬇️ Download ZIP", zip_buffer.getvalue(), file_name="Processed_Images.zip", mime="application/zip")
+            check_mp = st.selectbox("Target Marketplace", ["Amazon", "Myntra", "Flipkart"])
+            audit_files = st.file_uploader("Upload Images to Audit", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True, key="audit_up")
+            
+            if audit_files and st.button("Run Audit"):
+                results = []
+                for f in audit_files:
+                    # Reset file pointer
+                    f.seek(0)
+                    res = validate_image_compliance(f, check_mp)
+                    results.append(res)
+                
+                df_res = pd.DataFrame(results)
+                
+                # Visual Feedback
+                st.dataframe(df_res.style.map(lambda x: 'color: red' if 'FAIL' in str(x) else 'color: green', subset=['Status']), use_container_width=True)
+                
+                # Download Report
+                csv = df_res.to_csv(index=False).encode('utf-8')
+                st.download_button("⬇️ Download Audit Report", csv, "vision_guard_report.csv", "text/csv")
 
     # --- ADMIN TABS ---
     if st.session_state.user_role.lower() == "admin":
@@ -774,4 +816,3 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
