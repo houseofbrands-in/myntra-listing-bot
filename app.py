@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     REMBG_AVAILABLE = False
 
-st.set_page_config(page_title="HOB OS - V10.9 (Final)", layout="wide")
+st.set_page_config(page_title="HOB OS - V10.9.1 (Synonym Fix)", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -233,7 +233,6 @@ def enforce_master_data(value, options):
     str_val = str(value).strip().lower()
     
     # --- 1. SYNONYM MAPPING (The "Common Sense" Layer) ---
-    # Map what AI says -> What your Excel likely has
     synonyms = {
         "no sleeves": "Sleeveless",
         "no sleeve": "Sleeveless",
@@ -250,11 +249,8 @@ def enforce_master_data(value, options):
         "plain": "Solid"
     }
     
-    # Check if the AI's word is in our dictionary
     if str_val in synonyms:
-        # If the synonym target is actually in your Excel options, use it!
         target = synonyms[str_val]
-        # Case-insensitive check against options
         for opt in options:
             if str(opt).lower() == target.lower():
                 return opt
@@ -264,17 +260,16 @@ def enforce_master_data(value, options):
         if str(opt).lower() == str_val:
             return opt 
             
-    # --- 3. FUZZY MATCH (Existing) ---
-    # Lowered cutoff to 0.5 to catch "Floral" vs "Floral Print"
+    # --- 3. FUZZY MATCH (Relaxed) ---
     matches = difflib.get_close_matches(str_val, [str(o).lower() for o in options], n=1, cutoff=0.5)
     if matches:
-        # Find the original case-sensitive option
         match_lower = matches[0]
         for opt in options:
             if str(opt).lower() == match_lower:
                 return opt
         
-    return "" # If strict mode, return blank rather than wrong data
+    return ""
+
 # --- SMART TRUNCATOR (Layer 2 Defense) ---
 def smart_truncate(text, max_length):
     """
@@ -422,9 +417,7 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
         # Layer 2: Fallback to Dropdown Style
         style_pref = settings.get('prompt_style', 'Standard (Auto)')
         
-        elif "Technical" in style_pref:
-            # IMPROVED TECHNICAL PROMPT
-            style_instruction = "Be FACTUAL. Look closely at patterns. If the fabric has ANY print (floral, geometric, abstract), do NOT call it Solid. Use standard fashion terms."
+        style_instruction = ""
         
         if custom_prompt and len(str(custom_prompt)) > 5:
             # USER OVERRIDE DETECTED
@@ -434,7 +427,8 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             if "Creative" in style_pref:
                 style_instruction = "Write ELABORATE, PERSUASIVE, SALES-DRIVEN copy. Focus on visuals, texture, and benefits."
             elif "Technical" in style_pref:
-                style_instruction = "Be STRICT, FACTUAL, and PRECISE. Use standard industry terminology. No fluff."
+                # IMPROVED TECHNICAL PROMPT: Handles the "Solid vs Floral" issue
+                style_instruction = "Be FACTUAL. Look closely at patterns. If the fabric has ANY print (floral, geometric, abstract), do NOT call it Solid. Use standard fashion terms."
             elif "SEO" in style_pref:
                 style_instruction = "Heavily optimize for SEO. Incorporate keywords naturally but aggressively."
             else: # Standard (Auto)
@@ -904,4 +898,3 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
