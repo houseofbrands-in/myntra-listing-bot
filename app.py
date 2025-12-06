@@ -226,24 +226,55 @@ def encode_image_from_url(url):
     except Exception as e: 
         return None, f"Network Error: {str(e)}"
 
-# --- MASTER DATA ENFORCER (STRICT) ---
+# --- MASTER DATA ENFORCER (STRICT + SYNONYMS) ---
 def enforce_master_data(value, options):
-    """Forces AI value to closest match in Master Data list."""
+    """Forces AI value to closest match in Master Data list with Synonym mapping."""
     if not value: return ""
-    str_val = str(value).strip()
+    str_val = str(value).strip().lower()
     
-    # 1. Exact Match
+    # --- 1. SYNONYM MAPPING (The "Common Sense" Layer) ---
+    # Map what AI says -> What your Excel likely has
+    synonyms = {
+        "no sleeves": "Sleeveless",
+        "no sleeve": "Sleeveless",
+        "sleeveless": "Sleeveless",
+        "half sleeve": "Short Sleeves",
+        "half sleeves": "Short Sleeves",
+        "full sleeve": "Long Sleeves",
+        "full sleeves": "Long Sleeves",
+        "flower": "Floral",
+        "flowers": "Floral",
+        "floral print": "Floral",
+        "printed": "Print",
+        "solid color": "Solid",
+        "plain": "Solid"
+    }
+    
+    # Check if the AI's word is in our dictionary
+    if str_val in synonyms:
+        # If the synonym target is actually in your Excel options, use it!
+        target = synonyms[str_val]
+        # Case-insensitive check against options
+        for opt in options:
+            if str(opt).lower() == target.lower():
+                return opt
+
+    # --- 2. EXACT MATCH ---
     for opt in options:
-        if str(opt).lower() == str_val.lower():
+        if str(opt).lower() == str_val:
             return opt 
             
-    # 2. Fuzzy Match
-    matches = difflib.get_close_matches(str_val, [str(o) for o in options], n=1, cutoff=0.6)
+    # --- 3. FUZZY MATCH (Existing) ---
+    # Lowered cutoff to 0.5 to catch "Floral" vs "Floral Print"
+    matches = difflib.get_close_matches(str_val, [str(o).lower() for o in options], n=1, cutoff=0.5)
     if matches:
-        return matches[0]
+        # Find the original case-sensitive option
+        match_lower = matches[0]
+        for opt in options:
+            if str(opt).lower() == match_lower:
+                return opt
         
-    return ""
-
+    return "" # If strict mode, return blank rather than wrong data
 # --- SMART TRUNCATOR (Layer 2 Defense) ---
 def smart_truncate(text, max_length):
     """
@@ -391,7 +422,9 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
         # Layer 2: Fallback to Dropdown Style
         style_pref = settings.get('prompt_style', 'Standard (Auto)')
         
-        style_instruction = ""
+        elif "Technical" in style_pref:
+            # IMPROVED TECHNICAL PROMPT
+            style_instruction = "Be FACTUAL. Look closely at patterns. If the fabric has ANY print (floral, geometric, abstract), do NOT call it Solid. Use standard fashion terms."
         
         if custom_prompt and len(str(custom_prompt)) > 5:
             # USER OVERRIDE DETECTED
@@ -871,3 +904,4 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
