@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     REMBG_AVAILABLE = False
 
-st.set_page_config(page_title="HOB OS - V10.6", layout="wide")
+st.set_page_config(page_title="HOB OS - V10.7", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -248,20 +248,14 @@ def enforce_master_data(value, options):
 def smart_truncate(text, max_length):
     """
     Cuts text to limit without splitting words.
-    Example: "Soft Cotton Fab..." -> "Soft Cotton"
     """
     if not text: return ""
     text = str(text).strip()
     
-    # If already within limit, return as is
     if len(text) <= max_length:
         return text
     
-    # Hard cut to limit
     truncated = text[:max_length]
-    
-    # If the character AFTER our cut was not a space, we likely cut a word in half.
-    # So we backtrack to the last space in our truncated string.
     if len(text) > max_length and text[max_length] != " ":
         if " " in truncated:
             truncated = truncated.rsplit(" ", 1)[0]
@@ -308,30 +302,21 @@ def validate_image_compliance(image_file, marketplace):
         status = "✅ PASS"
         issues = []
 
-        # 1. Resolution Check
         if marketplace == "Amazon":
-            if w < 1000 or h < 1000:
-                issues.append(f"Low Res ({w}x{h} < 1000px)")
-            if not (0.95 <= ratio <= 1.05):
-                issues.append(f"Not Square (Ratio: {ratio:.2f})")
+            if w < 1000 or h < 1000: issues.append(f"Low Res ({w}x{h} < 1000px)")
+            if not (0.95 <= ratio <= 1.05): issues.append(f"Not Square (Ratio: {ratio:.2f})")
         
         elif marketplace == "Myntra":
-            if h < 900:
-                issues.append(f"Low Height ({h} < 900px)")
-            if not (0.65 <= ratio <= 0.85): # Approx 3:4
-                issues.append(f"Wrong Aspect Ratio ({ratio:.2f})")
+            if h < 900: issues.append(f"Low Height ({h} < 900px)")
+            if not (0.65 <= ratio <= 0.85): issues.append(f"Wrong Aspect Ratio ({ratio:.2f})")
 
-        # 2. Background Check (Simple Corner Check)
         if marketplace == "Amazon":
             img_rgb = img.convert("RGB")
             corners = [img_rgb.getpixel((0, 0)), img_rgb.getpixel((w-1, 0))]
-            is_white = all(sum(c) > 750 for c in corners) # >750 means very close to 255,255,255
-            if not is_white:
-                issues.append("Background not White")
+            is_white = all(sum(c) > 750 for c in corners) 
+            if not is_white: issues.append("Background not White")
 
-        if issues:
-            status = "❌ FAIL"
-        
+        if issues: status = "❌ FAIL"
         return {"Filename": image_file.name, "Status": status, "Issues": ", ".join(issues), "Dimensions": f"{w}x{h}"}
 
     except Exception as e:
@@ -343,69 +328,65 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
     base64_image, error = encode_image_from_url(image_url)
     if error: return None, error
 
-    # 2. Sort columns & Inject Limits
+    # 2. Sort columns & Inject Instructions based on "AI Style"
     tech_cols = []
-    creative_cols = []
     gemini_constraints = [] 
     relevant_options = {} 
     
-    # Prepare detailed target list with limits for the Prompt
     target_definitions = []
 
     for col, settings in config['column_mapping'].items():
-        # Get Max Len if it exists
-        max_len = settings.get('max_len', '')
-        limit_instruction = ""
-        
-        if max_len and str(max_len).isdigit():
-            limit_instruction = f" (MAX LENGTH: {max_len} chars - Write close to this limit)"
-        
-        if settings['source'] == 'AI':
-            # Check for Master Data
-            master_options = []
-            for master_col, opts in config['master_data'].items():
-                if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                    master_options = opts
-                    break
-            
-            if master_options:
-                tech_cols.append(col)
-                relevant_options[col] = master_options
-                gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
-                target_definitions.append(f"TECHNICAL FIELD '{col}': Pick exact match from strict options.") 
-            else:
-                creative_cols.append(col)
-                # Specific instructions for Creative Fields
-                if "desc" in col.lower() or "feature" in col.lower() or "bullet" in col.lower():
-                    style_guide = "Write elaborate, selling copy. Mention fabric feel, fit, and occasion. Use keywords naturally."
-                elif "title" in col.lower() or "name" in col.lower():
-                    style_guide = "Standard professional e-commerce title formatting."
-                else:
-                    style_guide = "Fill accurately based on image."
-                
-                target_definitions.append(f"CREATIVE FIELD '{col}' {limit_instruction}: {style_guide}")
+        if settings['source'] != 'AI': continue
 
-    # 3. Marketplace Rules (Enhanced)
+        # --- A. MAX CHARS INSTRUCTION ---
+        max_len = settings.get('max_len', '')
+        limit_txt = f" (MAX LENGTH: {max_len} chars)" if max_len and str(max_len).isdigit() else ""
+        
+        # --- B. PROMPT STYLE INSTRUCTION (USER DEFINED) ---
+        style_pref = settings.get('prompt_style', 'Standard (Auto)')
+        style_instruction = ""
+        
+        if "Creative" in style_pref:
+            style_instruction = "Write ELABORATE, PERSUASIVE, SALES-DRIVEN copy. Focus on visuals, texture, and benefits. Do not be brief."
+        elif "Technical" in style_pref:
+            style_instruction = "Be STRICT, FACTUAL, and PRECISE. Use standard industry terminology. No fluff."
+        elif "SEO" in style_pref:
+            style_instruction = "Heavily optimize for SEO. Incorporate keywords naturally but aggressively."
+        else: # Standard (Auto)
+            if "desc" in col.lower() or "feature" in col.lower():
+                style_instruction = "Write professional e-commerce copy."
+            else:
+                style_instruction = "Identify accuracy from image."
+
+        # --- C. MASTER DATA CHECK ---
+        master_options = []
+        for master_col, opts in config['master_data'].items():
+            if master_col.lower() in col.lower() or col.lower() in master_col.lower():
+                master_options = opts
+                break
+        
+        if master_options:
+            tech_cols.append(col)
+            relevant_options[col] = master_options
+            gemini_constraints.append(f"- Column '{col}': MUST be one of {json.dumps(master_options)}")
+            target_definitions.append(f"FIELD '{col}': Select exact match from options.") 
+        else:
+            target_definitions.append(f"FIELD '{col}' {limit_txt}: {style_instruction}")
+
+    # 3. Marketplace Rules
     seo_section = f"SEO KEYWORDS: {keywords}" if keywords else ""
     mp_rules = ""
     if marketplace.lower() == "amazon":
-        mp_rules = """
-        - Bullet Points: Write 5 distinct selling points. Start each with a concise BOLD header (e.g., 'Soft Cotton:'). Focus on benefits.
-        - Title: Brand + Department + Material + Pattern + Style + Generic Name.
-        """
+        mp_rules = "- Bullet Points: 5 bullets. START with BOLD header. - Title: Brand + Dept + Material + Pattern + Style."
     elif marketplace.lower() == "flipkart":
-        mp_rules = """
-        - Key Features: Write professional, distinct bullet points emphasizing USPs (Unique Selling Propositions).
-        - Description: Write a rich, paragraph-style description. Describe the look, feel, and versatility of the product.
-        - Avoid: "Great product", "Buy now". Use professional terms like "Premium finish", "Durable construction".
-        """
+        mp_rules = "- Description: Detailed, paragraph style. Use 'Premium quality', 'Durable'. Avoid generic praise."
     elif marketplace.lower() == "myntra":
-        mp_rules = "- Title: Brand + Style + Category. Keep it punchy.\n- Description: Focus on styling tips and material details."
+        mp_rules = "- Title: Brand + Style + Category. Punchy."
 
     # 4. ENGINE SWITCHING
     try:
         # ======================================================
-        # OPTION A: GPT-4o (High Quality)
+        # OPTION A: GPT-4o
         # ======================================================
         if "GPT" in model_choice:
             prompt = f"""
@@ -413,33 +394,30 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             
             INPUT CONTEXT: {user_hints}
             {seo_section}
-            MARKETPLACE STYLE GUIDE: {mp_rules}
+            MARKETPLACE GUIDELINES: {mp_rules}
             
-            TASK: Generate JSON for the following columns.
+            TASK: Generate JSON for these columns. Follow the specific STYLE instructions for each field.
             
-            STRICT DROPDOWN OPTIONS (You MUST pick from these for Technical Fields):
+            STRICT DROPDOWN OPTIONS (Technical Fields):
             {json.dumps(relevant_options)}
             
-            COLUMN REQUIREMENTS:
+            COLUMN INSTRUCTIONS:
             {chr(10).join(target_definitions)}
-            
-            CRITICAL INSTRUCTION: 
-            For 'Description', 'Key Features', or 'Bullets': Do NOT be brief. Analyze the image visual details (texture, pattern, cut) and write detailed, persuasive content. Fill the available character limit with high-quality information.
             """
             
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a helpful, detail-oriented e-commerce assistant who outputs only valid JSON."},
+                    {"role": "system", "content": "You are a JSON-only assistant."},
                     {"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=2000 # Increased token limit for richer descriptions
+                max_tokens=2000
             )
             return json.loads(response.choices[0].message.content), None
 
         # ======================================================
-        # OPTION B: GEMINI 2.5 FLASH (High Speed)
+        # OPTION B: GEMINI 2.5 FLASH
         # ======================================================
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return None, "Gemini API Key missing."
@@ -449,16 +427,15 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
             image_part = {"mime_type": "image/jpeg", "data": img_data}
             
             gemini_prompt = f"""
-            Act as a Senior Cataloging Expert for {marketplace}.
+            Senior Cataloging Bot for {marketplace}.
             
-            TECHNICAL COLUMNS (STRICT SELECTION - Do not invent values):
+            TECHNICAL COLUMNS (STRICT):
             {chr(10).join(gemini_constraints)}
             
-            CREATIVE COLUMNS (Write Detailed, Sales-Optimized Content):
+            CREATIVE COLUMNS (Follow Style Guide):
             {chr(10).join(target_definitions)}
             
             RULES: {mp_rules} {seo_section}
-            
             OUTPUT: Valid JSON only.
             """
             
@@ -499,7 +476,7 @@ else:
     if st.sidebar.button("🔄 Refresh Data"): st.rerun()
     
     with st.sidebar.expander("ℹ️ Guide"):
-        st.markdown("**1. Setup:** Map Columns.\n**2. Run:** Generate Listing.\n**3. Tools:** Process Images.")
+        st.markdown("**1. Setup:** Map Columns & Set Styles.\n**2. Run:** Generate Listing.\n**3. Tools:** Audit Images.")
 
     mp_cats = get_categories_for_marketplace(selected_mp)
     
@@ -538,15 +515,16 @@ else:
                     src = "Leave Blank"; h_low = h.lower()
                     if "image" in h_low or "sku" in h_low: src = "Input Excel"
                     elif h in master_options or "name" in h_low or "desc" in h_low: src = "AI Generation"
-                    # Default structure now includes Max Len
+                    
                     default_mapping.append({
                         "Column Name": h, 
                         "Source": src, 
                         "Fixed Value": "", 
-                        "Max Chars": "" 
+                        "Max Chars": "",
+                        "AI Style": "Standard (Auto)"
                     })
             
-            # Create a UI-friendly list from the loaded config if it exists
+            # Load existing config + handle missing keys
             ui_data = []
             if mode == "Edit Existing" and loaded:
                 for col, rule in loaded['column_mapping'].items():
@@ -555,7 +533,8 @@ else:
                         "Column Name": col,
                         "Source": src_map.get(rule['source'], "Leave Blank"),
                         "Fixed Value": rule.get('value', ''),
-                        "Max Chars": rule.get('max_len', '') 
+                        "Max Chars": rule.get('max_len', ''),
+                        "AI Style": rule.get('prompt_style', 'Standard (Auto)')
                     })
             else:
                 ui_data = default_mapping
@@ -566,7 +545,8 @@ else:
                 column_config={
                     "Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"], width="medium"),
                     "Fixed Value": st.column_config.TextColumn("Fixed Value", width="medium"),
-                    "Max Chars": st.column_config.NumberColumn("Max Chars", min_value=1, max_value=5000, step=1, help="Leave 0 or blank for no limit.", width="small")
+                    "Max Chars": st.column_config.NumberColumn("Max Chars", min_value=1, max_value=5000, step=1, help="0 = No Limit", width="small"),
+                    "AI Style": st.column_config.SelectboxColumn("AI Style", options=["Standard (Auto)", "✨ Creative / Salesy", "🔧 Technical / Strict", "🔍 SEO Focused"], help="Control how AI writes this column.", width="medium")
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -578,17 +558,15 @@ else:
                 for i, row in edited_df.iterrows():
                     src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
                     
-                    # Handle Max Len
                     m_len = row['Max Chars']
-                    if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len) == "0":
-                        m_len = ""
-                    else:
-                        m_len = int(m_len)
+                    if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len) == "0": m_len = ""
+                    else: m_len = int(m_len)
 
                     final_map[row['Column Name']] = {
                         "source": src_code, 
                         "value": row['Fixed Value'],
-                        "max_len": m_len
+                        "max_len": m_len,
+                        "prompt_style": row['AI Style']
                     }
                 
                 if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
@@ -608,7 +586,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN (V10.6 INTEGRATED) ---
+    # --- TAB 3: RUN ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
         
@@ -642,7 +620,6 @@ else:
             with c_run2:
                 model_select = st.selectbox("AI Model Engine", ["GPT-4o", "Gemini 2.5 Flash"])
             with c_run3:
-                # Manual Column Selector
                 potential_cols = [c for c in df_input.columns if "image" in c.lower() or "url" in c.lower() or "link" in c.lower()]
                 default_idx = df_input.columns.get_loc(potential_cols[0]) if potential_cols else 0
                 img_col = st.selectbox("Select Image URL Column", df_input.columns, index=default_idx)
@@ -668,11 +645,8 @@ else:
                 mapping = config['column_mapping']
                 current_total = len(df_to_process)
                 
-                # --- PROCESSING LOOP ---
                 for idx, row in df_to_process.iterrows():                  
-                    # --- SAFETY BRAKE FOR GEMINI ---
-                    if "Gemini" in model_select:
-                        time.sleep(5) 
+                    if "Gemini" in model_select: time.sleep(5) 
 
                     status.text(f"Processing Row {idx+1}/{current_total} ({model_select})...")
                     progress.progress((idx+1)/current_total)
@@ -692,23 +666,14 @@ else:
                             ai_data = cache[img_url]
                         else:
                             hints = ", ".join([f"{k}: {v}" for k,v in row.items() if str(v) != "nan" and k != img_col])
-                            
-                            attempts = 0
-                            max_retries = 2
+                            attempts = 0; max_retries = 2
                             while attempts < max_retries:
                                 ai_data, last_error = analyze_image_hybrid(model_select, client, img_url, hints, active_kws, config, selected_mp)
-                                if ai_data: 
-                                    break 
-                                else:
-                                    attempts += 1
-                                    time.sleep(1) 
-                            
-                            if ai_data: 
-                                cache[img_url] = ai_data
-                            else:
-                                error_log.error(f"❌ FAILED [Row {idx+1}]: {last_error}")
+                                if ai_data: break 
+                                else: attempts += 1; time.sleep(1) 
+                            if ai_data: cache[img_url] = ai_data
+                            else: error_log.error(f"❌ FAILED [Row {idx+1}]: {last_error}")
                     
-                    # --- MAPPING & ENFORCEMENT ---
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
@@ -720,31 +685,23 @@ else:
                                 for ic in df_input.columns:
                                     if ic.lower() in col.lower(): final_val = row[ic]; break
 
-                        elif rule['source'] == 'FIXED': 
-                            final_val = rule['value']
+                        elif rule['source'] == 'FIXED': final_val = rule['value']
 
                         elif rule['source'] == 'AI':
                             if ai_data:
-                                if col in ai_data: 
-                                    final_val = ai_data[col]
+                                if col in ai_data: final_val = ai_data[col]
                                 else:
                                     clean_col = col.lower().replace(" ", "").replace("_", "")
                                     for k, v in ai_data.items():
                                         clean_k = k.lower().replace(" ", "").replace("_", "")
-                                        if clean_k in clean_col or clean_col in clean_k:
-                                            final_val = v; break
+                                        if clean_k in clean_col or clean_col in clean_k: final_val = v; break
                             
-                            # Master Data Enforce
                             master_list = []
                             for master_col, opts in config['master_data'].items():
                                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                                    master_list = opts
-                                    break
-                            
-                            if master_list and final_val:
-                                final_val = enforce_master_data(final_val, master_list)
+                                    master_list = opts; break
+                            if master_list and final_val: final_val = enforce_master_data(final_val, master_list)
 
-                        # --- APPLY SMART TRUNCATION (Max Limit) ---
                         max_len = rule.get('max_len')
                         if max_len and str(max_len).isdigit() and int(max_len) > 0:
                             final_val = smart_truncate(final_val, int(max_len))
@@ -760,10 +717,9 @@ else:
                 st.success("✅ Done!")
                 st.download_button("⬇️ Download Result", output_gen.getvalue(), file_name=f"{selected_mp}_{run_cat}_Generated.xlsx")
 
-    # --- TAB 4: TOOLS (VISION GUARD ADDED) ---
+    # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🛠️ Media Tools")
-        
         tool_mode = st.radio("Select Tool", ["🖼️ Bulk Processor (Resize/BG Removal)", "🛡️ Vision Guard (Compliance Check)"], horizontal=True)
         st.divider()
 
@@ -774,21 +730,14 @@ else:
                 target_w = st.number_input("Width (px)", value=1000, step=100)
                 target_h = st.number_input("Height (px)", value=1000, step=100)
             with c_tool2:
-                resize_mode = st.selectbox("Resize Mode", [
-                    "Scale & Pad (White Bars)", 
-                    "Resize Only (No Padding)", 
-                    "Stretch to Target (Distort)"
-                ])
+                resize_mode = st.selectbox("Resize Mode", ["Scale & Pad (White Bars)", "Resize Only (No Padding)", "Stretch to Target (Distort)"])
                 remove_bg = st.checkbox("Remove Background (AI)", help="Required for Amazon Main Image.")
-                if remove_bg and not REMBG_AVAILABLE:
-                    st.error("❌ 'rembg' library not installed.")
+                if remove_bg and not REMBG_AVAILABLE: st.error("❌ 'rembg' library not installed.")
 
             tool_files = st.file_uploader("Upload Images", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True, key="proc_up")
-            
             if tool_files and st.button("Process Images"):
                 zip_buffer = BytesIO()
                 prog_bar = st.progress(0)
-                
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
                     for i, f in enumerate(tool_files):
                         processed, err = process_image_advanced(f, target_w, target_h, resize_mode, remove_bg)
@@ -799,31 +748,22 @@ else:
                             zf.writestr(fname, img_byte_arr.getvalue())
                         else: st.warning(f"Failed {f.name}: {err}")
                         prog_bar.progress((i+1)/len(tool_files))
-                
                 st.success("Complete!")
                 st.download_button("⬇️ Download ZIP", zip_buffer.getvalue(), file_name="Processed_Images.zip", mime="application/zip")
 
         elif tool_mode == "🛡️ Vision Guard (Compliance Check)":
             st.subheader("Marketplace Compliance Audit")
             st.info("Checks images for Resolution, Aspect Ratio, and White Background compliance.")
-            
             check_mp = st.selectbox("Target Marketplace", ["Amazon", "Myntra", "Flipkart"])
             audit_files = st.file_uploader("Upload Images to Audit", type=["jpg", "png", "jpeg", "webp"], accept_multiple_files=True, key="audit_up")
-            
             if audit_files and st.button("Run Audit"):
                 results = []
                 for f in audit_files:
-                    # Reset file pointer
                     f.seek(0)
                     res = validate_image_compliance(f, check_mp)
                     results.append(res)
-                
                 df_res = pd.DataFrame(results)
-                
-                # Visual Feedback
                 st.dataframe(df_res.style.map(lambda x: 'color: red' if 'FAIL' in str(x) else 'color: green', subset=['Status']), use_container_width=True)
-                
-                # Download Report
                 csv = df_res.to_csv(index=False).encode('utf-8')
                 st.download_button("⬇️ Download Audit Report", csv, "vision_guard_report.csv", "text/csv")
 
@@ -850,4 +790,3 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
