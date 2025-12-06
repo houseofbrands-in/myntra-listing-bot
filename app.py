@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     REMBG_AVAILABLE = False
 
-st.set_page_config(page_title="HOB OS - V10.8 (Lyra Edition)", layout="wide")
+st.set_page_config(page_title="HOB OS - V10.9 (Final)", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -322,7 +322,7 @@ def validate_image_compliance(image_file, marketplace):
     except Exception as e:
         return {"Filename": image_file.name, "Status": "⚠️ ERROR", "Issues": str(e), "Dimensions": "N/A"}
 
-# --- LYRA PROMPT OPTIMIZER (NEW!) ---
+# --- LYRA PROMPT OPTIMIZER ---
 def run_lyra_optimization(model_choice, raw_instruction):
     """
     Uses the Lyra 4-D Methodology to optimize raw user ideas into pro prompts.
@@ -357,8 +357,6 @@ def run_lyra_optimization(model_choice, raw_instruction):
         elif "Gemini" in model_choice:
             if not GEMINI_AVAILABLE: return "Gemini API Key missing."
             model = genai.GenerativeModel('gemini-2.5-flash')
-            # Gemini handles system prompts via concatenation or system_instruction (depending on lib version)
-            # We use robust concatenation here
             full_prompt = f"{lyra_system_prompt}\n\nUSER REQUEST: {user_msg}"
             response = model.generate_content(full_prompt)
             return response.text
@@ -386,21 +384,31 @@ def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, 
         max_len = settings.get('max_len', '')
         limit_txt = f" (MAX LENGTH: {max_len} chars)" if max_len and str(max_len).isdigit() else ""
         
-        # --- B. PROMPT STYLE INSTRUCTION (USER DEFINED) ---
+        # --- B. PROMPT STYLE (DUAL LAYER) ---
+        # Layer 1: Check for Custom Prompt Override (Lyra)
+        custom_prompt = settings.get('custom_prompt', '')
+        
+        # Layer 2: Fallback to Dropdown Style
         style_pref = settings.get('prompt_style', 'Standard (Auto)')
+        
         style_instruction = ""
         
-        if "Creative" in style_pref:
-            style_instruction = "Write ELABORATE, PERSUASIVE, SALES-DRIVEN copy. Focus on visuals, texture, and benefits. Do not be brief."
-        elif "Technical" in style_pref:
-            style_instruction = "Be STRICT, FACTUAL, and PRECISE. Use standard industry terminology. No fluff."
-        elif "SEO" in style_pref:
-            style_instruction = "Heavily optimize for SEO. Incorporate keywords naturally but aggressively."
-        else: # Standard (Auto)
-            if "desc" in col.lower() or "feature" in col.lower():
-                style_instruction = "Write professional e-commerce copy."
-            else:
-                style_instruction = "Identify accuracy from image."
+        if custom_prompt and len(str(custom_prompt)) > 5:
+            # USER OVERRIDE DETECTED
+            style_instruction = f"STRICT USER INSTRUCTION: {custom_prompt}"
+        else:
+            # DROPDOWN LOGIC
+            if "Creative" in style_pref:
+                style_instruction = "Write ELABORATE, PERSUASIVE, SALES-DRIVEN copy. Focus on visuals, texture, and benefits."
+            elif "Technical" in style_pref:
+                style_instruction = "Be STRICT, FACTUAL, and PRECISE. Use standard industry terminology. No fluff."
+            elif "SEO" in style_pref:
+                style_instruction = "Heavily optimize for SEO. Incorporate keywords naturally but aggressively."
+            else: # Standard (Auto)
+                if "desc" in col.lower() or "feature" in col.lower():
+                    style_instruction = "Write professional e-commerce copy."
+                else:
+                    style_instruction = "Identify accuracy from image."
 
         # --- C. MASTER DATA CHECK ---
         master_options = []
@@ -565,7 +573,8 @@ else:
                         "Source": src, 
                         "Fixed Value": "", 
                         "Max Chars": "",
-                        "AI Style": "Standard (Auto)"
+                        "AI Style": "Standard (Auto)",
+                        "Custom Prompt": ""
                     })
             
             # Load existing config + handle missing keys
@@ -578,7 +587,8 @@ else:
                         "Source": src_map.get(rule['source'], "Leave Blank"),
                         "Fixed Value": rule.get('value', ''),
                         "Max Chars": rule.get('max_len', ''),
-                        "AI Style": rule.get('prompt_style', 'Standard (Auto)')
+                        "AI Style": rule.get('prompt_style', 'Standard (Auto)'),
+                        "Custom Prompt": rule.get('custom_prompt', '')
                     })
             else:
                 ui_data = default_mapping
@@ -590,7 +600,8 @@ else:
                     "Source": st.column_config.SelectboxColumn("Source", options=["Input Excel", "AI Generation", "Fixed Value", "Leave Blank"], width="medium"),
                     "Fixed Value": st.column_config.TextColumn("Fixed Value", width="medium"),
                     "Max Chars": st.column_config.NumberColumn("Max Chars", min_value=1, max_value=5000, step=1, help="0 = No Limit", width="small"),
-                    "AI Style": st.column_config.SelectboxColumn("AI Style", options=["Standard (Auto)", "✨ Creative / Salesy", "🔧 Technical / Strict", "🔍 SEO Focused"], help="Control how AI writes this column.", width="medium")
+                    "AI Style": st.column_config.SelectboxColumn("AI Style", options=["Standard (Auto)", "✨ Creative / Salesy", "🔧 Technical / Strict", "🔍 SEO Focused"], help="Quick preset.", width="medium"),
+                    "Custom Prompt": st.column_config.TextColumn("Custom Prompt (Optional)", help="Paste Lyra output here to override AI Style.", width="large")
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -610,7 +621,8 @@ else:
                         "source": src_code, 
                         "value": row['Fixed Value'],
                         "max_len": m_len,
-                        "prompt_style": row['AI Style']
+                        "prompt_style": row['AI Style'],
+                        "custom_prompt": row['Custom Prompt']
                     }
                 
                 if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
@@ -818,7 +830,7 @@ else:
         **Use this tool to generate 'Pro-Level' instructions for your configs.**
         1. Type a rough idea (e.g., "Make it sound like a high-end Italian brand").
         2. Lyra will rewrite it into a perfect AI instruction.
-        3. Copy the result and paste it into the **Setup Tab** if you want custom styling.
+        3. Copy the result and paste it into the **Setup Tab** under **'Custom Prompt (Optional)'**.
         """)
         
         c_lyra1, c_lyra2 = st.columns([1, 1])
