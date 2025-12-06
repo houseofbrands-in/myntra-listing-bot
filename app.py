@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     REMBG_AVAILABLE = False
 
-st.set_page_config(page_title="HOB OS - V10.7", layout="wide")
+st.set_page_config(page_title="HOB OS - V10.8 (Lyra Edition)", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -322,6 +322,50 @@ def validate_image_compliance(image_file, marketplace):
     except Exception as e:
         return {"Filename": image_file.name, "Status": "⚠️ ERROR", "Issues": str(e), "Dimensions": "N/A"}
 
+# --- LYRA PROMPT OPTIMIZER (NEW!) ---
+def run_lyra_optimization(model_choice, raw_instruction):
+    """
+    Uses the Lyra 4-D Methodology to optimize raw user ideas into pro prompts.
+    """
+    lyra_system_prompt = """
+    You are Lyra, a master-level AI prompt optimization specialist. 
+    Mission: Transform user input into precision-crafted prompts for e-commerce automation.
+
+    ## THE 4-D METHODOLOGY
+    1. DECONSTRUCT: Identify core intent and key entities.
+    2. DIAGNOSE: Audit for clarity gaps.
+    3. DEVELOP: Select tone (Creative/Technical) and constraints.
+    4. DELIVER: Output ONLY the optimized prompt text.
+
+    CONTEXT: The user is configuring a listing bot column (e.g., Description, Title). 
+    They will provide a rough idea. You must output a precise instruction block that can be pasted into the config.
+    """
+    
+    user_msg = f"Optimize this instruction for an AI Column Generator: '{raw_instruction}'"
+
+    try:
+        if "GPT" in model_choice:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": lyra_system_prompt},
+                    {"role": "user", "content": user_msg}
+                ]
+            )
+            return response.choices[0].message.content
+        
+        elif "Gemini" in model_choice:
+            if not GEMINI_AVAILABLE: return "Gemini API Key missing."
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            # Gemini handles system prompts via concatenation or system_instruction (depending on lib version)
+            # We use robust concatenation here
+            full_prompt = f"{lyra_system_prompt}\n\nUSER REQUEST: {user_msg}"
+            response = model.generate_content(full_prompt)
+            return response.text
+            
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 # --- AI LOGIC (GPT + GEMINI) ---
 def analyze_image_hybrid(model_choice, client, image_url, user_hints, keywords, config, marketplace):
     # 1. Prepare Image
@@ -480,7 +524,7 @@ else:
 
     mp_cats = get_categories_for_marketplace(selected_mp)
     
-    base_tabs = ["🛠️ Setup", "📈 SEO", "🚀 Run", "🖼️ Tools"]
+    base_tabs = ["🛠️ Setup", "📈 SEO", "🚀 Run", "🖼️ Tools", "🧪 Prompt Lab"]
     if st.session_state.user_role.lower() == "admin": base_tabs += ["🗑️ Configs", "👥 Admin"]
     tabs = st.tabs(base_tabs)
 
@@ -767,15 +811,40 @@ else:
                 csv = df_res.to_csv(index=False).encode('utf-8')
                 st.download_button("⬇️ Download Audit Report", csv, "vision_guard_report.csv", "text/csv")
 
+    # --- TAB 5: PROMPT LAB (LYRA) ---
+    with tabs[4]: 
+        st.header("🧪 HOB Prompt Lab (Powered by Lyra)")
+        st.markdown("""
+        **Use this tool to generate 'Pro-Level' instructions for your configs.**
+        1. Type a rough idea (e.g., "Make it sound like a high-end Italian brand").
+        2. Lyra will rewrite it into a perfect AI instruction.
+        3. Copy the result and paste it into the **Setup Tab** if you want custom styling.
+        """)
+        
+        c_lyra1, c_lyra2 = st.columns([1, 1])
+        with c_lyra1:
+            raw_idea = st.text_area("Your Rough Idea", height=150, placeholder="Example: Write a description for kids' toys that sounds exciting and mentions safety.")
+            target_ai = st.radio("Target Engine", ["GPT-4o", "Gemini 2.5 Flash"], horizontal=True)
+        
+        with c_lyra2:
+            st.info("💡 **Lyra's Output**")
+            if st.button("✨ Optimize Prompt"):
+                if not raw_idea:
+                    st.warning("Enter an idea first.")
+                else:
+                    with st.spinner("Lyra is analyzing..."):
+                        optimized = run_lyra_optimization(target_ai, raw_idea)
+                        st.text_area("Result", value=optimized, height=250)
+
     # --- ADMIN TABS ---
     if st.session_state.user_role.lower() == "admin":
-        with tabs[4]:
+        with tabs[5]:
             st.header("Manage Configs")
             to_del = st.selectbox("Delete", [""]+mp_cats)
             if to_del and st.button("Delete Config"):
                 delete_config(selected_mp, to_del); st.success("Deleted"); time.sleep(1); st.rerun()
 
-        with tabs[5]:
+        with tabs[6]:
             st.header("👥 Admin Console")
             st.dataframe(pd.DataFrame(get_all_users()))
             c_add1, c_add2 = st.columns(2)
