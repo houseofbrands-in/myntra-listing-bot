@@ -218,12 +218,8 @@ def smart_truncate(text, max_length):
         if " " in truncated: truncated = truncated.rsplit(" ", 1)[0]
     return truncated.strip()
 
-# --- ENFORCER (Relaxed - V11.0.2 Fix) ---
+# --- SMART ENFORCER (V11.0.3 Fix) ---
 def enforce_master_data_fallback(value, options):
-    """
-    Relaxed Logic: Checks for matches, but returns the RAW VALUE if no match found.
-    This prevents empty cells.
-    """
     if not value: return ""
     str_val = str(value).strip().lower()
     
@@ -231,24 +227,38 @@ def enforce_master_data_fallback(value, options):
     for opt in options:
         if str(opt).strip().lower() == str_val:
             return opt
-            
-    # 2. Fuzzy Match
+
+    # 2. Noise Removal (The Fix for "Floral Print" -> "Floral")
+    # We strip these common filler words to see if the core value matches.
+    noise_words = ["print", "pattern", "type", "design", "motif", "style"]
+    clean_val = str_val
+    for word in noise_words:
+        clean_val = clean_val.replace(word, "").strip()
+    
+    # Check if the "Cleaned" version matches an option
+    for opt in options:
+        if str(opt).strip().lower() == clean_val:
+            return opt
+
+    # 3. Smart Substring (Word-boundary safe)
+    # Ensures we find "Floral" inside "Floral Print" but NOT "Blue" inside "Blueberry"
+    for opt in options:
+        opt_val = str(opt).strip().lower()
+        # Check if the option exists as a whole word in the input
+        # e.g. "floral" is inside "floral print"
+        if f" {opt_val} " in f" {str_val} ":
+            return opt
+
+    # 4. Fuzzy Match (Last Resort)
     matches = difflib.get_close_matches(str_val, [str(o).lower() for o in options], n=1, cutoff=0.6)
     if matches:
         match_lower = matches[0]
         for opt in options:
             if str(opt).lower() == match_lower:
                 return opt
-                
-    # 3. Substring Match (e.g. "Floral Print" -> "Floral")
-    for opt in options:
-        opt_str = str(opt).lower()
-        if opt_str in str_val or str_val in opt_str:
-            return opt
 
-    # 4. NO MATCH? Return the raw value so user can see it.
-    return value 
-
+    # 5. Return Raw (If all else fails, show user the AI output)
+    return value
 # --- LYRA PROMPT OPTIMIZER ---
 def run_lyra_optimization(model_choice, raw_instruction):
     lyra_system_prompt = """
@@ -710,4 +720,5 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
