@@ -274,7 +274,7 @@ def run_lyra_optimization(model_choice, raw_instruction):
             return response.text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- V11.0.3: MAKER-CHECKER (HYBRID BEHAVIOR) ---
+# --- V11.0.6: MAKER-CHECKER (CHEAT SHEET MODE) ---
 def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
     # PREPARE DATA
     target_columns = []
@@ -294,7 +294,7 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
             if not is_technical:
                 creative_columns.append(col)
     
-    # PHASE 1: MAKER (GEMINI) - Balanced Mode
+    # PHASE 1: MAKER (GEMINI) - WITH CHEAT SHEET
     maker_draft = {}
     try:
         if not GEMINI_AVAILABLE: return None, "Gemini Missing"
@@ -302,24 +302,24 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
         img_data = base64.b64decode(base64_image)
         image_part = {"mime_type": "image/jpeg", "data": img_data}
         
-        # HYBRID PROMPT: Split instructions for Facts vs Copy
+        # We pass the Allowed Options to Gemini so it stops guessing generic words
         maker_prompt = f"""
         Role: E-commerce Expert for {marketplace}.
         Task: Analyze image and generate JSON.
         
-        SECTION A: TECHNICAL FACTS (Be Robotic & Precise)
-        - For these columns: {list(strict_constraints.keys())}
-        - RULES: Look closely at the visual details. Do not hallucinate. Be literal.
+        SECTION A: TECHNICAL FACTS (Strict Selection)
+        - You MUST select values ONLY from the provided options below.
+        - Do NOT invent new words (e.g., do not say "Printed" if the list has "Floral").
+        - ALLOWED OPTIONS: {json.dumps(strict_constraints)}
         
-        SECTION B: CREATIVE COPY (Be Engaging & Varied)
+        SECTION B: CREATIVE COPY (Be Engaging)
         - For these columns: {creative_columns}
-        - RULES: Use emotional language, sensory words, and vary the sentence structure. SEO Keywords: {keywords}
+        - RULES: Use emotional language, sensory words. SEO Keywords: {keywords}
         
         Context Hints: {user_hints}
         Output: JSON Only.
         """
         
-        # Temp 0.4: Sweet spot. Low enough for facts, high enough for unique descriptions.
         response = model.generate_content(
             [maker_prompt, image_part],
             generation_config=genai.types.GenerationConfig(temperature=0.4) 
@@ -344,13 +344,12 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
         3. Allowed Options: {json.dumps(strict_constraints)}
         
         YOUR MISSION:
-        1. PRESERVE CREATIVITY: Keep the Draft's Title and Description if they are accurate. Do not make them robotic.
+        1. PRESERVE CREATIVITY: Keep the Draft's Title and Description if they are accurate.
         
         2. ENFORCE CONSISTENCY (Technical Fields):
-           - Look at the columns with Allowed Options.
            - IGNORE the Draft's opinion if it conflicts with the Image or the Allowed List.
-           - If the image shows "Floral", the output MUST be "Floral" (or closest list match), even if Draft said "Abstract".
-           - MAPPING RULE: Map "Strappy/Cami" -> "Sleeveless". Map "Knee Length" -> "Midi" (if applicable).
+           - CRITICAL: If the Draft says "Printed" or "Patterned", YOU must look at the image and pick the specific type (e.g. "Floral", "Geometric", "Striped") from the Allowed Options.
+           - Map "Strappy/Cami" -> "Sleeveless". 
         
         3. OUTPUT: Final JSON for columns: {", ".join(target_columns)}
         """
@@ -365,49 +364,13 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
                 ]}
             ],
             response_format={"type": "json_object"},
-            temperature=0.0 # ZERO TEMP ensures Master Data never fluctuates for same image
-        )
-        return json.loads(response.choices[0].message.content), None
-
-    except Exception as e:
-        return None, f"Checker Failed: {str(e)}"    # PHASE 2: CHECKER (GPT-4o)
-    try:
-        checker_prompt = f"""
-        You are the LEAD QUALITY AUDITOR.
-        
-        INPUTS:
-        1. Visual: [Image provided]
-        2. Draft Logic: {json.dumps(maker_draft)}
-        3. Allowed Master Data: {json.dumps(strict_constraints)}
-        
-        YOUR MISSION:
-        1. AUDIT THE VIBE: Look at the image. If the draft says "Wedding" but the image is a casual/floral dress, CHANGE it to "Resort" or "Casual". correct specific hallucinations.
-        2. SEMANTIC ENFORCEMENT (Crucial): 
-           - For columns with Allowed Master Data, you must MAP the visual reality to the closest allowed option.
-           - Example: If image has 'Spaghetti Straps' and Allowed Options are ['Sleeveless', 'Short'], you MUST output 'Sleeveless'.
-           - Do NOT leave fields blank if visual evidence exists.
-        
-        3. OUTPUT: Final Polish JSON for these columns: {", ".join(target_columns)}
-        """
-
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a Strict Data Auditor. Temperature=0."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": checker_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                ]}
-            ],
-            response_format={"type": "json_object"},
             temperature=0.0
         )
         return json.loads(response.choices[0].message.content), None
 
     except Exception as e:
         return None, f"Checker Failed: {str(e)}"
-
-# --- LEGACY SINGLE MODEL ---
+        # --- LEGACY SINGLE MODEL ---
 def analyze_image_single(model_choice, client, base64_image, user_hints, keywords, config, marketplace):
     tech_cols = []
     target_definitions = []
@@ -713,6 +676,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
