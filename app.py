@@ -271,21 +271,27 @@ def run_lyra_optimization(model_choice, raw_instruction):
             return response.text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- V11.0: MAKER-CHECKER ARCHITECTURE ---
+# --- V11.0.3: MAKER-CHECKER (HYBRID BEHAVIOR) ---
 def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
     # PREPARE DATA
     target_columns = []
-    strict_constraints = {}
+    strict_constraints = {} # For Technical Fields (Dropdowns)
+    creative_columns = []   # For Copy Fields (Title/Desc)
     
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
             target_columns.append(col)
+            # Check if this is a Master Data (Technical) field
+            is_technical = False
             for master_col, opts in config['master_data'].items():
                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
                     strict_constraints[col] = opts
+                    is_technical = True
                     break
+            if not is_technical:
+                creative_columns.append(col)
     
-    # PHASE 1: MAKER (GEMINI)
+    # PHASE 1: MAKER (GEMINI) - Balanced Mode
     maker_draft = {}
     try:
         if not GEMINI_AVAILABLE: return None, "Gemini Missing"
@@ -293,22 +299,29 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
         img_data = base64.b64decode(base64_image)
         image_part = {"mime_type": "image/jpeg", "data": img_data}
         
+        # HYBRID PROMPT: Split instructions for Facts vs Copy
         maker_prompt = f"""
-        Role: E-commerce Listing Expert for {marketplace}.
-        Task: Draft content for the following columns based on the image.
+        Role: E-commerce Expert for {marketplace}.
+        Task: Analyze image and generate JSON.
         
-        Columns Needed: {", ".join(target_columns)}
+        SECTION A: TECHNICAL FACTS (Be Robotic & Precise)
+        - For these columns: {list(strict_constraints.keys())}
+        - RULES: Look closely at the visual details. Do not hallucinate. Be literal.
+        
+        SECTION B: CREATIVE COPY (Be Engaging & Varied)
+        - For these columns: {creative_columns}
+        - RULES: Use emotional language, sensory words, and vary the sentence structure. SEO Keywords: {keywords}
+        
         Context Hints: {user_hints}
-        SEO Keywords: {keywords}
-        
-        INSTRUCTIONS:
-        1. Be CREATIVE for Titles and Descriptions. Capture the Vibe (e.g., Resort vs Wedding).
-        2. Be DESCRIPTIVE for Attributes (Sleeves, Neck, etc). Describe what you see visually.
-        
         Output: JSON Only.
         """
         
-        response = model.generate_content([maker_prompt, image_part])
+        # Temp 0.4: Sweet spot. Low enough for facts, high enough for unique descriptions.
+        response = model.generate_content(
+            [maker_prompt, image_part],
+            generation_config=genai.types.GenerationConfig(temperature=0.4) 
+        )
+        
         text_out = response.text
         if "```json" in text_out: text_out = text_out.split("```json")[1].split("```")[0]
         elif "```" in text_out: text_out = text_out.split("```")[1].split("```")[0]
@@ -317,7 +330,44 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
     except Exception as e:
         return None, f"Maker Failed: {str(e)}"
 
-    # PHASE 2: CHECKER (GPT-4o)
+    # PHASE 2: CHECKER (GPT-4o) - The Strict Arbiter
+    try:
+        checker_prompt = f"""
+        You are the LEAD DATA AUDITOR.
+        
+        INPUTS:
+        1. Visual: [Image provided]
+        2. Draft: {json.dumps(maker_draft)}
+        3. Allowed Options: {json.dumps(strict_constraints)}
+        
+        YOUR MISSION:
+        1. PRESERVE CREATIVITY: Keep the Draft's Title and Description if they are accurate. Do not make them robotic.
+        
+        2. ENFORCE CONSISTENCY (Technical Fields):
+           - Look at the columns with Allowed Options.
+           - IGNORE the Draft's opinion if it conflicts with the Image or the Allowed List.
+           - If the image shows "Floral", the output MUST be "Floral" (or closest list match), even if Draft said "Abstract".
+           - MAPPING RULE: Map "Strappy/Cami" -> "Sleeveless". Map "Knee Length" -> "Midi" (if applicable).
+        
+        3. OUTPUT: Final JSON for columns: {", ".join(target_columns)}
+        """
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a Data Consistency Engine. Temperature=0.0."},
+                {"role": "user", "content": [
+                    {"type": "text", "text": checker_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0 # ZERO TEMP ensures Master Data never fluctuates for same image
+        )
+        return json.loads(response.choices[0].message.content), None
+
+    except Exception as e:
+        return None, f"Checker Failed: {str(e)}"    # PHASE 2: CHECKER (GPT-4o)
     try:
         checker_prompt = f"""
         You are the LEAD QUALITY AUDITOR.
@@ -660,3 +710,4 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
