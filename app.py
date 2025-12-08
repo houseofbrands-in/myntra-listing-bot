@@ -493,20 +493,34 @@ else:
                 hide_index=True, use_container_width=True, height=400
             )
             
-            if st.button("Save Config"):
+           if st.button("Save Config"):
                 final_map = {}
                 for i, row in edited_df.iterrows():
+                    # 1. Source Logic
                     src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
+                    
+                    # 2. Robust Max Chars Handling (The Fix)
                     m_len = row['Max Chars']
-                    if pd.isna(m_len) or str(m_len) == "0": m_len = ""
-                    else: m_len = int(m_len)
-                    final_map[row['Column Name']] = {
-                        "source": src_code, "value": row['Fixed Value'], "max_len": m_len,
-                        "prompt_style": row['AI Style'], "custom_prompt": row['Custom Prompt']
-                    }
-                if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
-                    st.success("Saved!"); time.sleep(1); st.rerun()
+                    # Check for Empty, None, Whitespace, or 0
+                    if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len).strip() == "0":
+                        m_len = ""
+                    else:
+                        try:
+                            # Convert to float first (to handle 500.0) then to int
+                            m_len = int(float(m_len))
+                        except ValueError:
+                            m_len = "" # Fallback to no limit if invalid
 
+                    final_map[row['Column Name']] = {
+                        "source": src_code, 
+                        "value": row['Fixed Value'], 
+                        "max_len": m_len,
+                        "prompt_style": row['AI Style'], 
+                        "custom_prompt": row['Custom Prompt']
+                    }
+                
+                if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
+                    st.success("✅ Saved Successfully!"); time.sleep(1); st.rerun()
     # --- TAB 2: SEO ---
     with tabs[1]:
         st.header(f"2. SEO Keywords")
@@ -647,3 +661,4 @@ else:
         with tabs[6]:
             st.dataframe(pd.DataFrame(get_all_users()))
             # (Admin functions hidden for brevity in paste, assume previous logic)
+
