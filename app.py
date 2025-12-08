@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     REMBG_AVAILABLE = False
 
-st.set_page_config(page_title="HOB OS - V11.0.1 (Stable)", layout="wide")
+st.set_page_config(page_title="HOB OS - V11.0.2 (Stable)", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -218,18 +218,21 @@ def smart_truncate(text, max_length):
         if " " in truncated: truncated = truncated.rsplit(" ", 1)[0]
     return truncated.strip()
 
-# --- ENFORCER (Fallback Only) ---
+# --- ENFORCER (Relaxed - V11.0.2 Fix) ---
 def enforce_master_data_fallback(value, options):
-def enforce_master_data_fallback(value, options):
+    """
+    Relaxed Logic: Checks for matches, but returns the RAW VALUE if no match found.
+    This prevents empty cells.
+    """
     if not value: return ""
     str_val = str(value).strip().lower()
     
-    # 1. Exact Match (Case Insensitive)
+    # 1. Exact Match
     for opt in options:
         if str(opt).strip().lower() == str_val:
             return opt
             
-    # 2. Fuzzy Match (Relatively Strict)
+    # 2. Fuzzy Match
     matches = difflib.get_close_matches(str_val, [str(o).lower() for o in options], n=1, cutoff=0.6)
     if matches:
         match_lower = matches[0]
@@ -237,15 +240,15 @@ def enforce_master_data_fallback(value, options):
             if str(opt).lower() == match_lower:
                 return opt
                 
-    # 3. Substring Match (e.g., "Floral Print" -> matches "Floral")
+    # 3. Substring Match (e.g. "Floral Print" -> "Floral")
     for opt in options:
         opt_str = str(opt).lower()
         if opt_str in str_val or str_val in opt_str:
             return opt
 
-    # 4. SAFETY NET: Return Raw Value if no match (Don't delete it!)
-    # We mark it with a small asterisk so you know it wasn't a perfect match
-    return value
+    # 4. NO MATCH? Return the raw value so user can see it.
+    return value 
+
 # --- LYRA PROMPT OPTIMIZER ---
 def run_lyra_optimization(model_choice, raw_instruction):
     lyra_system_prompt = """
@@ -599,28 +602,22 @@ else:
                         if rule['source'] == 'INPUT': val = row.get(col, "")
                         elif rule['source'] == 'FIXED': val = rule['value']
                         elif rule['source'] == 'AI' and ai_data:
-                            # --- IMPROVED KEY MATCHING ---
-                            # 1. Exact Key
+                            # KEY MATCHING (PARTIAL/FUZZY)
                             if col in ai_data: val = ai_data[col]
                             else: 
-                                # 2. Fuzzy/Partial Key Match (Fixes "Sleeves" vs "Sleeve")
                                 clean_col = col.lower().replace(" ", "").replace("_", "")
                                 best_match = None
                                 for k,v in ai_data.items():
                                     clean_k = k.lower().replace(" ", "").replace("_", "")
-                                    # If 'sleeve' is in 'sleevelength' or vice versa
                                     if clean_k in clean_col or clean_col in clean_k:
                                         best_match = v; break
                                 val = best_match if best_match else ""
                             
-                            # --- IMPROVED ENFORCEMENT ---
+                            # MASTER DATA ENFORCEMENT
                             m_list = []
                             for mc, opts in config['master_data'].items():
                                 if mc.lower() in col.lower() or col.lower() in mc.lower(): m_list = opts; break
-                            
-                            if m_list:
-                                # Run the safe fallback (returns raw value if fails)
-                                val = enforce_master_data_fallback(val, m_list)
+                            if m_list and val: val = enforce_master_data_fallback(val, m_list)
                         
                         if rule.get('max_len'): val = smart_truncate(val, rule['max_len'])
                         new_row[col] = val
@@ -630,7 +627,8 @@ else:
                 output_gen = BytesIO()
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: pd.DataFrame(final_rows).to_excel(writer, index=False)
                 st.success("✅ Done!")
-                st.download_button("⬇️ Result", output_gen.getvalue(), file_name="Generated_V11_Fixed.xlsx")
+                st.download_button("⬇️ Result", output_gen.getvalue(), file_name="Generated_V11.xlsx")
+
     # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🛠️ Media Tools")
@@ -662,4 +660,3 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
