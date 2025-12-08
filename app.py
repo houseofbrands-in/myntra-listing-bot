@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     REMBG_AVAILABLE = False
 
-st.set_page_config(page_title="HOB OS - V11.0 (Maker-Checker)", layout="wide")
+st.set_page_config(page_title="HOB OS - V11.0.1 (Stable)", layout="wide")
 
 # ==========================================
 # 1. AUTHENTICATION & DATABASE CONNECT
@@ -220,23 +220,15 @@ def smart_truncate(text, max_length):
 
 # --- ENFORCER (Fallback Only) ---
 def enforce_master_data_fallback(value, options):
-    """
-    V11.0: Used as a final safety net. 
-    Main enforcement happens in GPT-4o Prompt now.
-    """
     if not value: return ""
     str_val = str(value).strip().lower()
-    
-    # Simple fuzzy match for things GPT missed
     matches = difflib.get_close_matches(str_val, [str(o).lower() for o in options], n=1, cutoff=0.6)
     if matches:
         match_lower = matches[0]
         for opt in options:
             if str(opt).lower() == match_lower:
                 return opt
-    return "" # Leave blank if completely unknown, or return original value? 
-    # V11 Update: If no match, we trust GPT's output unless strict mode is needed. 
-    # For now, let's return blank to signal error if strictly required.
+    return "" 
 
 # --- LYRA PROMPT OPTIMIZER ---
 def run_lyra_optimization(model_choice, raw_instruction):
@@ -262,27 +254,19 @@ def run_lyra_optimization(model_choice, raw_instruction):
 
 # --- V11.0: MAKER-CHECKER ARCHITECTURE ---
 def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
-    """
-    Phase 1: Gemini (Maker) - Fast, Creative Draft.
-    Phase 2: GPT-4o (Checker) - Audit, Correct Hallucinations (Wedding vs Resort), Enforce Synonyms (Strappy -> Sleeveless).
-    """
-    
-    # --- PREPARE DATA ---
+    # PREPARE DATA
     target_columns = []
     strict_constraints = {}
     
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
             target_columns.append(col)
-            # Check for Master Data options
             for master_col, opts in config['master_data'].items():
                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
                     strict_constraints[col] = opts
                     break
     
-    # ==========================================
-    # PHASE 1: THE MAKER (GEMINI)
-    # ==========================================
+    # PHASE 1: MAKER (GEMINI)
     maker_draft = {}
     try:
         if not GEMINI_AVAILABLE: return None, "Gemini Missing"
@@ -314,9 +298,7 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
     except Exception as e:
         return None, f"Maker Failed: {str(e)}"
 
-    # ==========================================
-    # PHASE 2: THE CHECKER (GPT-4o)
-    # ==========================================
+    # PHASE 2: CHECKER (GPT-4o)
     try:
         checker_prompt = f"""
         You are the LEAD QUALITY AUDITOR.
@@ -346,16 +328,15 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
                 ]}
             ],
             response_format={"type": "json_object"},
-            temperature=0.0 # ZERO TEMP for consistency
+            temperature=0.0
         )
         return json.loads(response.choices[0].message.content), None
 
     except Exception as e:
         return None, f"Checker Failed: {str(e)}"
 
-# --- LEGACY SINGLE MODEL (Still available for speed) ---
+# --- LEGACY SINGLE MODEL ---
 def analyze_image_single(model_choice, client, base64_image, user_hints, keywords, config, marketplace):
-    # (Same logic as V10.9.1, retained for 'Single Model' mode)
     tech_cols = []
     target_definitions = []
     relevant_options = {}
@@ -365,13 +346,11 @@ def analyze_image_single(model_choice, client, base64_image, user_hints, keyword
         custom_prompt = settings.get('custom_prompt', '')
         style_pref = settings.get('prompt_style', 'Standard (Auto)')
         
-        # Style Instruction
         if custom_prompt: style_instr = f"USER RULE: {custom_prompt}"
         elif "Creative" in style_pref: style_instr = "Style: Creative, Sales-driven."
         elif "Technical" in style_pref: style_instr = "Style: Technical, Factual."
         else: style_instr = "Style: Standard."
 
-        # Master Data
         m_opts = []
         for master_col, opts in config['master_data'].items():
             if master_col.lower() in col.lower() or col.lower() in master_col.lower():
@@ -384,7 +363,6 @@ def analyze_image_single(model_choice, client, base64_image, user_hints, keyword
         else:
             target_definitions.append(f"Field '{col}': {style_instr}")
 
-    # Prompting
     try:
         if "GPT" in model_choice:
             prompt = f"Marketplace: {marketplace}. Hints: {user_hints}. SEO: {keywords}. Generate JSON for:\n{chr(10).join(target_definitions)}"
@@ -493,34 +471,28 @@ else:
                 hide_index=True, use_container_width=True, height=400
             )
             
-           if st.button("Save Config"):
+            if st.button("Save Config"):
                 final_map = {}
                 for i, row in edited_df.iterrows():
-                    # 1. Source Logic
                     src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
                     
-                    # 2. Robust Max Chars Handling (The Fix)
+                    # ROBUST MAX CHARS LOGIC
                     m_len = row['Max Chars']
-                    # Check for Empty, None, Whitespace, or 0
                     if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len).strip() == "0":
                         m_len = ""
                     else:
                         try:
-                            # Convert to float first (to handle 500.0) then to int
                             m_len = int(float(m_len))
                         except ValueError:
-                            m_len = "" # Fallback to no limit if invalid
+                            m_len = ""
 
                     final_map[row['Column Name']] = {
-                        "source": src_code, 
-                        "value": row['Fixed Value'], 
-                        "max_len": m_len,
-                        "prompt_style": row['AI Style'], 
-                        "custom_prompt": row['Custom Prompt']
+                        "source": src_code, "value": row['Fixed Value'], "max_len": m_len,
+                        "prompt_style": row['AI Style'], "custom_prompt": row['Custom Prompt']
                     }
-                
                 if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
                     st.success("✅ Saved Successfully!"); time.sleep(1); st.rerun()
+
     # --- TAB 2: SEO ---
     with tabs[1]:
         st.header(f"2. SEO Keywords")
@@ -543,7 +515,6 @@ else:
         run_cat = st.selectbox("Select Category", mp_cats, key="run")
         config = load_config(selected_mp, run_cat)
         
-        # Download Template
         if config:
             req_cols = ["Image URL"] + [c for c, r in config.get('column_mapping', {}).items() if r.get('source') == 'INPUT']
             output = BytesIO()
@@ -557,12 +528,10 @@ else:
             df_input = pd.read_excel(input_file)
             st.divider()
             
-            # --- V11.0: ARCHITECTURE SELECTION ---
             c_run1, c_run2, c_run3 = st.columns(3)
             with c_run1:
                 run_mode = st.radio("Run Scope", ["🧪 Test (First 3)", "🚀 Production (All)"])
             with c_run2:
-                # NEW: Maker-Checker Option
                 arch_mode = st.selectbox("AI Architecture", ["✨ Dual-AI (Maker-Checker)", "⚡ Gemini Only (Fast)", "🧠 GPT-4o Only (Precise)"])
             with c_run3:
                 cols = [c for c in df_input.columns if "url" in c.lower() or "image" in c.lower()]
@@ -570,7 +539,6 @@ else:
 
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
             
-            # Cost Estimation
             cost_per_row = 0.05 if "Maker-Checker" in arch_mode else 0.02 if "GPT" in arch_mode else 0.005
             st.metric("Est. Cost", f"${len(df_to_proc) * cost_per_row:.3f}")
 
@@ -598,7 +566,6 @@ else:
 
                         hints = ", ".join([f"{k}: {v}" for k,v in row.items() if k != img_col and str(v) != "nan"])
                         
-                        # --- V11.0: ROUTING LOGIC ---
                         if "Maker-Checker" in arch_mode:
                             ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
                         else:
@@ -608,7 +575,6 @@ else:
                         if ai_data: cache[img_url] = ai_data
                         else: log.error(f"Row {idx+1} Failed: {err}")
 
-                    # --- MAP OUTPUT TO COLUMNS ---
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
@@ -617,15 +583,12 @@ else:
                         if rule['source'] == 'INPUT': val = row.get(col, "")
                         elif rule['source'] == 'FIXED': val = rule['value']
                         elif rule['source'] == 'AI' and ai_data:
-                            # 1. Direct Match
                             if col in ai_data: val = ai_data[col]
                             else: 
-                                # 2. Fuzzy Key Match
                                 clean_col = col.lower().replace(" ", "")
                                 for k,v in ai_data.items():
                                     if k.lower().replace(" ", "") == clean_col: val = v; break
                             
-                            # 3. Master Data Fallback (If GPT missed it, or pure Gemini run)
                             m_list = []
                             for mc, opts in config['master_data'].items():
                                 if mc.lower() in col.lower() or col.lower() in mc.lower(): m_list = opts; break
@@ -660,5 +623,15 @@ else:
     if st.session_state.user_role == "admin":
         with tabs[6]:
             st.dataframe(pd.DataFrame(get_all_users()))
-            # (Admin functions hidden for brevity in paste, assume previous logic)
-
+            c_add1, c_add2 = st.columns(2)
+            with c_add1:
+                with st.form("add_user"):
+                    new_u = st.text_input("Username"); new_p = st.text_input("Password"); new_r = st.selectbox("Role", ["user", "admin"])
+                    if st.form_submit_button("Create"):
+                        ok, msg = create_user(new_u, new_p, new_r)
+                        if ok: st.success(msg); time.sleep(1); st.rerun()
+                        else: st.error(msg)
+            with c_add2:
+                u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
+                if st.button("Delete"):
+                    if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
