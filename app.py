@@ -218,48 +218,41 @@ def smart_truncate(text, max_length):
         if " " in truncated: truncated = truncated.rsplit(" ", 1)[0]
     return truncated.strip()
 
-# --- SMART ENFORCER (V11.0.3 Fix) ---
+# --- REVERSE LOOKUP ENFORCER (V11.0.5) ---
 def enforce_master_data_fallback(value, options):
     if not value: return ""
-    str_val = str(value).strip().lower()
+    ai_text = str(value).strip().lower()
     
-    # 1. Exact Match
+    # 1. Exact Match (Best Case)
     for opt in options:
-        if str(opt).strip().lower() == str_val:
+        if str(opt).strip().lower() == ai_text:
             return opt
 
-    # 2. Noise Removal (The Fix for "Floral Print" -> "Floral")
-    # We strip these common filler words to see if the core value matches.
-    noise_words = ["print", "pattern", "type", "design", "motif", "style"]
-    clean_val = str_val
-    for word in noise_words:
-        clean_val = clean_val.replace(word, "").strip()
-    
-    # Check if the "Cleaned" version matches an option
-    for opt in options:
-        if str(opt).strip().lower() == clean_val:
-            return opt
+    # 2. Reverse Lookup (The "Search Party")
+    # We sort your options by Length (Longest to Shortest).
+    # This ensures if you have "Ikat Print" and "Ikat", we match the specific "Ikat Print" first.
+    sorted_options = sorted(options, key=lambda x: len(str(x)), reverse=True)
 
-    # 3. Smart Substring (Word-boundary safe)
-    # Ensures we find "Floral" inside "Floral Print" but NOT "Blue" inside "Blueberry"
-    for opt in options:
+    for opt in sorted_options:
         opt_val = str(opt).strip().lower()
-        # Check if the option exists as a whole word in the input
-        # e.g. "floral" is inside "floral print"
-        if f" {opt_val} " in f" {str_val} ":
+        if not opt_val: continue
+        
+        # CHECK: Is your Valid Option inside the AI's text?
+        # e.g. Is "Floral" inside "Floral Printed"? -> YES -> Return "Floral"
+        if opt_val in ai_text:
             return opt
 
-    # 4. Fuzzy Match (Last Resort)
-    matches = difflib.get_close_matches(str_val, [str(o).lower() for o in options], n=1, cutoff=0.6)
+    # 3. Fuzzy Match (For spelling mistakes like "Florall")
+    matches = difflib.get_close_matches(ai_text, [str(o).lower() for o in options], n=1, cutoff=0.7)
     if matches:
         match_lower = matches[0]
         for opt in options:
             if str(opt).lower() == match_lower:
                 return opt
 
-    # 5. Return Raw (If all else fails, show user the AI output)
+    # 4. No Match Found? Return raw AI value so you can see it.
     return value
-# --- LYRA PROMPT OPTIMIZER ---
+    # --- LYRA PROMPT OPTIMIZER ---
 def run_lyra_optimization(model_choice, raw_instruction):
     lyra_system_prompt = """
     You are Lyra, a master-level AI prompt optimization specialist. 
@@ -720,5 +713,6 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
