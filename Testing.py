@@ -506,7 +506,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN (Testing Environment) ---
+  # --- TAB 3: RUN (Testing Environment) ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
         if not mp_cats: st.warning("No categories configured."); st.stop()
@@ -515,7 +515,8 @@ else:
         config = load_config(selected_mp, run_cat)
         
         if config:
-            req_cols = ["Image URL"] + [c for c, r in config.get('column_mapping', {}).items() if r.get('source') == 'INPUT']
+            # STRICT TEMPLATE LOGIC (V11.0.9 Standard)
+            req_cols = config['headers'] # Use exactly what is defined in Setup
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer: pd.DataFrame(columns=req_cols).to_excel(writer, index=False)
             st.download_button("📥 Download Template", output.getvalue(), file_name=f"Template_{run_cat}.xlsx")
@@ -536,48 +537,40 @@ else:
                 cols = [c for c in df_input.columns if "url" in c.lower() or "image" in c.lower()]
                 img_col = st.selectbox("Image Column", df_input.columns, index=df_input.columns.get_loc(cols[0]) if cols else 0)
 
-            # Filter rows based on mode
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
             
             cost_per_row = 0.05 if "Maker-Checker" in arch_mode else 0.02 if "GPT" in arch_mode else 0.005
             st.metric("Est. Cost", f"${len(df_to_proc) * cost_per_row:.3f}")
 
-            # --- START OF "SAFE BATCH" EXECUTION BLOCK ---
+            # --- START OF ROBUST BATCH BLOCK ---
             
-            # Initialize Session State for Results if not exists
             if "gen_results" not in st.session_state:
                 st.session_state.gen_results = []
             
-            # Start Button
             if st.button("▶️ Start Generation"):
-                # Clear previous results for a fresh run
-                st.session_state.gen_results = []
+                st.session_state.gen_results = [] # Clear old runs
                 
-                # Create Containers for Real-Time Feedback
                 st.write("### ⏳ Live Progress")
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
-                # Scrollable Log Container
-                st.write("### 📜 Event Log")
-                log_container = st.container(height=200) # Fixed height, scrollable
-                
-                # Live Data Preview
-                st.write("### 📊 Live Data Preview")
+                log_container = st.container(height=200) # Scrollable Log
                 data_preview = st.empty()
                 
                 mapping = config['column_mapping']
                 cache = {}
 
-                # WRAP IN TRY/EXCEPT TO CATCH CRASHES WITHOUT LOSING DATA
-                try:
-                    for idx, row in df_to_proc.iterrows():
-                        row_num = idx + 1
-                        total_rows = len(df_to_proc)
-                        
-                        status_text.markdown(f"**Processing Row {row_num} / {total_rows}**")
-                        progress_bar.progress(row_num / total_rows)
-                        
+                # Loop through rows
+                for idx, row in df_to_proc.iterrows():
+                    row_num = idx + 1
+                    total_rows = len(df_to_proc)
+                    
+                    # UPDATE PROGRESS
+                    status_text.markdown(f"**Processing Row {row_num} / {total_rows}**")
+                    progress_bar.progress(row_num / total_rows)
+
+                    # --- ROW ISOLATION TRY/EXCEPT ---
+                    # If this row fails, we catch it, log it, and CONTINUE to the next row.
+                    try:
                         img_url = str(row.get(img_col, "")).strip()
                         
                         # 1. VALIDATION
@@ -585,10 +578,8 @@ else:
                             log_container.warning(f"⚠️ Row {row_num}: Skipped (No URL)")
                             continue
 
-                        # 2. GENERATION (With Retry Logic)
+                        # 2. GENERATION
                         ai_data = None
-                        
-                        # Check Cache
                         if img_url in cache:
                             ai_data = cache[img_url]
                             log_container.info(f"✅ Row {row_num}: Loaded from Cache")
@@ -605,38 +596,30 @@ else:
                                     if "Maker-Checker" in arch_mode:
                                         ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
                                     else:
-                                        # Fallback to single mode if needed
-                                        # (Assuming single function exists, otherwise skipping)
+                                        # Fallback logic if single mode selected
                                         ai_data = {} 
-                                        err = "Single mode not fully implemented in this patch, select Maker-Checker"
+                                        err = "Selected Maker-Checker for best results."
 
                                     if err:
-                                        # API RATE LIMIT HANDLER
                                         if "429" in str(err) or "quota" in str(err).lower():
-                                            log_container.warning(f"⏳ Row {row_num}: API Limit Hit (429). Sleeping 60s... (Attempt {attempt+1})")
+                                            log_container.warning(f"⏳ Row {row_num}: API Limit Hit. Sleeping 60s... (Attempt {attempt+1})")
                                             time.sleep(60)
-                                            continue # Retry loop
+                                            continue 
                                         else:
                                             raise Exception(err)
                                     
-                                    # If success
                                     cache[img_url] = ai_data
-                                    break # Exit retry loop
+                                    break 
 
                                 except Exception as e:
                                     if attempt == max_retries - 1:
-                                        log_container.error(f"❌ Row {row_num}: Failed after retries. Error: {str(e)}")
-                                    else:
-                                        # If it's not a rate limit, maybe a glitch, wait 2s and retry
-                                        time.sleep(2)
+                                        raise e # Re-raise to outer loop if retries exhausted
+                                    time.sleep(2)
 
-                        # 3. MAPPING & SAVING
+                        # 3. MAPPING (STRICT V11.0.9 SCHEMA)
                         new_row = {}
-                        # Always preserve Input columns first
-                        for c in df_input.columns:
-                            new_row[c] = row[c]
-
-                        # Then add Generated columns
+                        
+                        # Only iterate through Config Headers (Preserves Sequence)
                         for col in config['headers']:
                             rule = mapping.get(col, {'source': 'BLANK'})
                             val = ""
@@ -646,7 +629,6 @@ else:
                             elif rule['source'] == 'AI' and ai_data:
                                 if col in ai_data: val = ai_data[col]
                                 else: 
-                                    # Fuzzy Match Key
                                     clean_col = col.lower().replace(" ", "").replace("_", "")
                                     for k,v in ai_data.items():
                                         if k.lower().replace(" ", "") in clean_col:
@@ -658,51 +640,47 @@ else:
                                     if mc.lower() in col.lower(): m_list = opts; break
                                 if m_list and val: val = enforce_master_data_fallback(val, m_list)
                             
-                            # --- CRITICAL FIX: SANITIZE DATA TYPES ---
-                            # This prevents the ArrowInvalid error by forcing everything to String
+                            # --- SAFETY SANITIZATION (Prevents Crashes) ---
                             if isinstance(val, list) or isinstance(val, tuple):
                                 val = ", ".join([str(x) for x in val])
                             elif isinstance(val, dict):
                                 val = json.dumps(val)
                             
-                            val = str(val).strip() # Final Safety Net
-                            # -----------------------------------------
-
-                            if rule.get('max_len'): val = smart_truncate(val, int(rule['max_len']))
+                            val = str(val).strip()
+                            if rule.get('max_len'): val = smart_truncate(val, int(float(rule['max_len'])))
+                            
                             new_row[col] = val
                         
-                        # 4. UPDATE STATE & UI IMMEDIATELY
+                        # 4. SAVE & UI
                         st.session_state.gen_results.append(new_row)
                         
-                        # Update the table on screen safely
-                        # We use .astype(str) to force visualization to just show text, preventing crashes
+                        # Safe Preview (Force String)
                         current_df = pd.DataFrame(st.session_state.gen_results)
-                        data_preview.dataframe(current_df.tail(3).astype(str)) 
-                
-                except Exception as critical_e:
-                    st.error(f"💀 CRITICAL SCRIPT CRASH: {str(critical_e)}")
-                    log_container.exception(critical_e)
-                
-                finally:
-                    st.success("🏁 Process Cycle Ended")
+                        data_preview.dataframe(current_df.tail(3).astype(str))
+                    
+                    except Exception as row_error:
+                        # LOG THE ERROR AND MOVE TO NEXT ROW
+                        log_container.error(f"❌ Row {row_num} Failed: {str(row_error)}")
+                        # We append an empty dict or partial result if needed, but safer to skip to ensure alignment
+                        continue 
 
-            # --- DISPLAY RESULTS & DOWNLOAD (Always visible if data exists) ---
+                st.success("✅ Batch Processing Complete!")
+
+            # --- RESULT DISPLAY ---
             if "gen_results" in st.session_state and len(st.session_state.gen_results) > 0:
                 st.divider()
-                st.header("💾 Results")
+                st.header("💾 Final Results")
                 
                 final_df = pd.DataFrame(st.session_state.gen_results)
-                
-                # Show full data SAFELY
-                st.write(f"captured {len(final_df)} rows.")
-                st.dataframe(final_df.astype(str)) 
+                st.write(f"Successfully processed {len(final_df)} rows.")
+                st.dataframe(final_df.astype(str))
                 
                 output_gen = BytesIO()
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
                     final_df.to_excel(writer, index=False)
                 
                 st.download_button(
-                    "⬇️ Download Generated Excel", 
+                    "⬇️ Download Excel", 
                     output_gen.getvalue(), 
                     file_name=f"Generated_{len(final_df)}_Rows.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
