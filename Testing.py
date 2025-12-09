@@ -506,7 +506,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
- # --- TAB 3: RUN (Phase 3: Final Fixed Dashboard) ---
+ # --- TAB 3: RUN (Phase 3: Final Polish - SKU Edition) ---
     with tabs[2]:
         st.header(f"🚀 {selected_mp} Generator Operations")
         
@@ -546,13 +546,23 @@ else:
                 with c_set2:
                     arch_mode = st.selectbox("AI Architecture", ["✨ Dual-AI (Maker-Checker)", "⚡ Gemini Only (Fast)", "🧠 GPT-4o Only (Precise)"])
                 with c_set3:
-                    cols = [c for c in df_input.columns if "url" in c.lower() or "image" in c.lower()]
-                    img_col = st.selectbox("Image Column", df_input.columns, index=df_input.columns.get_loc(cols[0]) if cols else 0)
+                    # SMART COLUMN DETECTION
+                    all_cols = df_input.columns.tolist()
+                    
+                    # 1. Image Column
+                    img_candidates = [c for c in all_cols if "url" in c.lower() or "image" in c.lower()]
+                    img_default = all_cols.index(img_candidates[0]) if img_candidates else 0
+                    img_col = st.selectbox("Image Column", all_cols, index=img_default)
+                    
+                    # 2. SKU/ID Column (New Feature)
+                    sku_candidates = [c for c in all_cols if "sku" in c.lower() or "style" in c.lower() or "design" in c.lower()]
+                    sku_default = all_cols.index(sku_candidates[0]) if sku_candidates else 0
+                    sku_col = st.selectbox("SKU/ID Column", all_cols, index=sku_default, help="Used for logging (e.g. 'Processed SKU-123')")
 
             # PRE-PROCESS ANALYSIS
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
             
-            # CRITICAL: Strip whitespace to ensure keys match perfectly
+            # Clean Keys
             df_to_proc[img_col] = df_to_proc[img_col].astype(str).str.strip()
             
             unique_urls = df_to_proc[img_col].unique()
@@ -582,8 +592,8 @@ else:
                 with c_prog:
                     progress_bar = st.progress(0)
                     status_text = st.empty()
-                    log_expander = st.expander("📜 Detailed Logs", expanded=False)
-                    log_container = log_expander.container(height=150)
+                    log_expander = st.expander("📜 Detailed Logs", expanded=True) # Expanded by default to see SKUs
+                    log_container = log_expander.container(height=200)
                 
                 with c_vis:
                     img_preview = st.empty()
@@ -598,50 +608,53 @@ else:
                         img_num = i + 1
                         total_imgs = len(unique_urls)
                         
+                        # GET SKU NAME FOR DISPLAY
+                        # Find the first row that matches this image to get the SKU Name
+                        sku_label = f"Image {img_num}"
+                        try:
+                            match_row = df_to_proc[df_to_proc[img_col] == u_key]
+                            if not match_row.empty:
+                                sku_label = str(match_row.iloc[0][sku_col])
+                        except: pass
+
                         # UI Update
-                        status_text.markdown(f"**Analyzing Image {img_num}/{total_imgs}**")
+                        status_text.markdown(f"**Analyzing: {sku_label}** ({img_num}/{total_imgs})")
                         progress_bar.progress(img_num / total_imgs)
                         ai_status_badge.info("⏳ Downloading...")
                         
-                        # 1. PREPARE DOWNLOAD URL (Separate from Key)
-                        download_url = u_key # Start with the key
+                        # 1. DOWNLOAD PREP
+                        download_url = u_key 
                         if "dropbox.com" in download_url:
-                            # Fix Dropbox links for downloading only
                             download_url = download_url.replace("?dl=0", "").replace("&dl=0", "") + ("&dl=1" if "?" in download_url else "?dl=1")
                         
-                        # 2. DOWNLOAD
+                        # 2. DOWNLOAD & PREVIEW
                         base64_img = None
                         try:
-                            # Use download_url for network, u_key for database
                             response = requests.get(download_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
                             if response.status_code == 200:
                                 img_data = response.content
-                                img_preview.image(img_data, caption=f"Processing...", width=200)
+                                # SHOW SKU IN CAPTION
+                                img_preview.image(img_data, caption=f"Analyzing: {sku_label}", width=250)
                                 base64_img = base64.b64encode(img_data).decode('utf-8')
                             else:
                                 raise Exception(f"Status {response.status_code}")
                         except Exception as e:
-                            log_container.warning(f"Download fail: {e}")
+                            log_container.warning(f"Download fail for {sku_label}: {e}")
                             img_preview.error("❌ Image Error")
                             continue
 
-                        # 3. SAFE HINT EXTRACTION (Uses u_key, not download_url)
+                        # 3. HINTS
                         hints = "Product analysis."
                         try:
-                            # Exact match because we stripped both earlier
-                            mask = df_to_proc[img_col] == u_key
-                            matching_rows = df_to_proc[mask]
-                            if not matching_rows.empty:
-                                sample_row = matching_rows.iloc[0]
+                            match_row = df_to_proc[df_to_proc[img_col] == u_key]
+                            if not match_row.empty:
+                                sample_row = match_row.iloc[0]
                                 hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v).lower() != "nan"])
                                 hints = smart_truncate(hints, 300)
-                            else:
-                                log_container.warning(f"Note: No hint data found for image key.")
-                        except Exception as e:
-                            log_container.warning(f"Hint warning: {e}")
+                        except: pass
 
                         # 4. AI ANALYSIS
-                        ai_status_badge.warning("🤖 AI Working... (Maker & Checker)")
+                        ai_status_badge.warning(f"🤖 AI Working on {sku_label}...")
                         ai_data = None
                         max_retries = 3
                         
@@ -650,7 +663,6 @@ else:
                                 if "Dual-AI" in arch_mode:
                                     ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
                                 else:
-                                    # Basic fallback if needed
                                     ai_data = {}
                                     err = "Select Dual-AI"
 
@@ -662,28 +674,29 @@ else:
                                     else:
                                         raise Exception(err)
                                 
-                                # SUCCESS: Store using the ORIGINAL u_key
                                 image_knowledge_base[u_key] = ai_data
-                                ai_status_badge.success("✅ Analysis Complete")
-                                log_container.success(f"Image {img_num} Processed")
+                                
+                                # LOG SUCCESS WITH SKU
+                                log_container.success(f"✅ {sku_label} Processed")
                                 break 
 
                             except Exception as e:
                                 if attempt == max_retries - 1:
-                                    log_container.error(f"Failed Img {img_num}: {str(e)}")
+                                    log_container.error(f"Failed {sku_label}: {str(e)}")
                                 time.sleep(2)
                         
                         time.sleep(0.5)
 
+                    # === CLEANUP UI ===
+                    ai_status_badge.success("✅ Batch Analysis Complete")
+                    img_preview.empty() # Remove the last image
+                    
                     # === PHASE 2: DATA MAPPING ===
-                    status_text.markdown("**🚀 Phase 2: Mapping Data to Excel...**")
+                    status_text.markdown("**🚀 Finalizing: Mapping Data to Excel...**")
                     final_rows = []
                     
                     for idx, row in df_to_proc.iterrows():
-                        # Use the exact same key logic
                         u_key = str(row.get(img_col, "")).strip()
-                        
-                        # Retrieve data using the original key
                         ai_data = image_knowledge_base.get(u_key, {})
                         
                         new_row = {}
