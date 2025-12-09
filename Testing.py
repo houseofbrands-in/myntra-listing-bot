@@ -506,7 +506,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN ---
+    # --- TAB 3: RUN (Testing Environment) ---
     with tabs[2]:
         st.header(f"3. Run {selected_mp} Generator")
         if not mp_cats: st.warning("No categories configured."); st.stop()
@@ -536,6 +536,7 @@ else:
                 cols = [c for c in df_input.columns if "url" in c.lower() or "image" in c.lower()]
                 img_col = st.selectbox("Image Column", df_input.columns, index=df_input.columns.get_loc(cols[0]) if cols else 0)
 
+            # Filter rows based on mode
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
             
             cost_per_row = 0.05 if "Maker-Checker" in arch_mode else 0.02 if "GPT" in arch_mode else 0.005
@@ -604,7 +605,8 @@ else:
                                     if "Maker-Checker" in arch_mode:
                                         ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
                                     else:
-                                        # Fallback to single mode if needed (assuming function exists, otherwise default to none)
+                                        # Fallback to single mode if needed
+                                        # (Assuming single function exists, otherwise skipping)
                                         ai_data = {} 
                                         err = "Single mode not fully implemented in this patch, select Maker-Checker"
 
@@ -656,15 +658,26 @@ else:
                                     if mc.lower() in col.lower(): m_list = opts; break
                                 if m_list and val: val = enforce_master_data_fallback(val, m_list)
                             
+                            # --- CRITICAL FIX: SANITIZE DATA TYPES ---
+                            # This prevents the ArrowInvalid error by forcing everything to String
+                            if isinstance(val, list) or isinstance(val, tuple):
+                                val = ", ".join([str(x) for x in val])
+                            elif isinstance(val, dict):
+                                val = json.dumps(val)
+                            
+                            val = str(val).strip() # Final Safety Net
+                            # -----------------------------------------
+
                             if rule.get('max_len'): val = smart_truncate(val, int(rule['max_len']))
                             new_row[col] = val
                         
                         # 4. UPDATE STATE & UI IMMEDIATELY
                         st.session_state.gen_results.append(new_row)
                         
-                        # Update the table on screen so user sees progress
+                        # Update the table on screen safely
+                        # We use .astype(str) to force visualization to just show text, preventing crashes
                         current_df = pd.DataFrame(st.session_state.gen_results)
-                        data_preview.dataframe(current_df.tail(3)) # Show last 3 rows added
+                        data_preview.dataframe(current_df.tail(3).astype(str)) 
                 
                 except Exception as critical_e:
                     st.error(f"💀 CRITICAL SCRIPT CRASH: {str(critical_e)}")
@@ -679,8 +692,10 @@ else:
                 st.header("💾 Results")
                 
                 final_df = pd.DataFrame(st.session_state.gen_results)
+                
+                # Show full data SAFELY
                 st.write(f"captured {len(final_df)} rows.")
-                st.dataframe(final_df) # Show full data
+                st.dataframe(final_df.astype(str)) 
                 
                 output_gen = BytesIO()
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
