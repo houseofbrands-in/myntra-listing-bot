@@ -274,46 +274,42 @@ def run_lyra_optimization(model_choice, raw_instruction):
             return response.text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- V11.0.7: MAKER-CHECKER (BEST MATCH MAPPING) ---
+# --- V11.0.8: MAKER-CHECKER (STRICT HIERARCHY MAPPING) ---
 def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
     # PREPARE DATA
     target_columns = []
-    strict_constraints = {} # For Technical Fields (Dropdowns)
-    creative_columns = []   # For Copy Fields (Title/Desc)
+    strict_constraints = {} 
+    creative_columns = []   
     
-    # 1. INTELLIGENT MAPPING (The Fix for "Midi" in "Sleeve Length")
-    # We loop through Target Columns first, then find the BEST Master Data match for each.
+    # 1. STRICT MAPPING LOGIC (The Fix)
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
             target_columns.append(col)
             
-            # Find the "Best" Master Data List for this column
             best_match_key = None
             best_match_len = -1
             
             for master_col in config['master_data'].keys():
-                # Check for substring match (e.g. "Length" in "Sleeve Length")
-                if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                    # SCORE THE MATCH: Longer match = More specific = Better
-                    # "Sleeve Length" (13 chars) > "Length" (6 chars)
-                    current_len = len(master_col)
-                    
-                    if current_len > best_match_len:
-                        best_match_len = current_len
+                c_clean = col.lower().strip()
+                m_clean = master_col.lower().strip()
+                
+                # A. EXACT MATCH (Highest Priority)
+                # "Length" == "Length" -> Wins immediately.
+                if c_clean == m_clean:
+                    best_match_key = master_col
+                    break # Stop searching, we found perfection.
+                
+                # B. CONTAINMENT MATCH (Target MUST contain Master)
+                # "Sleeve Length" contains "Sleeve" -> Valid.
+                # "Length" contains "Sleeve Length" -> FALSE. (Prevents the bug)
+                elif m_clean in c_clean:
+                    if len(m_clean) > best_match_len:
+                        best_match_len = len(m_clean)
                         best_match_key = master_col
-                    
-                    # Tie-Breaker: If lengths are equal (e.g. "Sleeve" vs "Length"), 
-                    # prefer the one that isn't a generic word.
-                    elif current_len == best_match_len:
-                        generic_terms = ["length", "type", "style", "category", "fabric"]
-                        if master_col.lower() not in generic_terms:
-                            best_match_key = master_col
 
             if best_match_key:
-                # We found a specific master list for this column
                 strict_constraints[col] = config['master_data'][best_match_key]
             else:
-                # No master data found, treat as Creative Column
                 creative_columns.append(col)
     
     # PHASE 1: MAKER (GEMINI) - WITH CHEAT SHEET
@@ -324,7 +320,6 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
         img_data = base64.b64decode(base64_image)
         image_part = {"mime_type": "image/jpeg", "data": img_data}
         
-        # We pass the Allowed Options to Gemini so it stops guessing generic words
         maker_prompt = f"""
         Role: E-commerce Expert for {marketplace}.
         Task: Analyze image and generate JSON.
@@ -645,6 +640,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
