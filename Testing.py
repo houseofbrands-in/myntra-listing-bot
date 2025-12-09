@@ -628,10 +628,24 @@ else:
                         ai_data = None
                         max_retries = 3
                         
-                        # Find Hints
-                        sample_row = df_to_proc[df_to_proc[img_col].astype(str).str.strip() == u_url].iloc[0]
-                        hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v) != "nan"])
-                        hints = smart_truncate(hints, 300) # Keep hints concise
+                        # --- SAFE HINT EXTRACTION (Crash Proof) ---
+                        hints = "Product image analysis." # Default fallback
+                        try:
+                            # Create a boolean mask to find the row safely
+                            mask = df_to_proc[img_col].astype(str).str.strip() == u_url
+                            matching_rows = df_to_proc[mask]
+                            
+                            if not matching_rows.empty:
+                                sample_row = matching_rows.iloc[0]
+                                # Extract hints from the found row
+                                hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v).lower() != "nan"])
+                                hints = smart_truncate(hints, 300)
+                            else:
+                                # This handles the edge case where the match fails
+                                log_container.warning(f"⚠️ Could not retrieve hints for Image {img_num}, proceeding with visual analysis only.")
+                        except Exception as hint_error:
+                            log_container.warning(f"⚠️ Hint Error on Img {img_num}: {str(hint_error)}")
+                        # ------------------------------------------
 
                         for attempt in range(max_retries):
                             try:
