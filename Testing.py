@@ -541,111 +541,157 @@ else:
             cost_per_row = 0.05 if "Maker-Checker" in arch_mode else 0.02 if "GPT" in arch_mode else 0.005
             st.metric("Est. Cost", f"${len(df_to_proc) * cost_per_row:.3f}")
 
+            # --- START OF "SAFE BATCH" EXECUTION BLOCK ---
+            
+            # Initialize Session State for Results if not exists
+            if "gen_results" not in st.session_state:
+                st.session_state.gen_results = []
+            
+            # Start Button
             if st.button("▶️ Start Generation"):
-                progress = st.progress(0)
-                status = st.empty()
-                log = st.empty()
-                final_rows = []
-                cache = {}
+                # Clear previous results for a fresh run
+                st.session_state.gen_results = []
+                
+                # Create Containers for Real-Time Feedback
+                st.write("### ⏳ Live Progress")
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Scrollable Log Container
+                st.write("### 📜 Event Log")
+                log_container = st.container(height=200) # Fixed height, scrollable
+                
+                # Live Data Preview
+                st.write("### 📊 Live Data Preview")
+                data_preview = st.empty()
+                
                 mapping = config['column_mapping']
+                cache = {}
 
-                # --- START OF HARDENED BATCH LOOP ---
-                for idx, row in df_to_proc.iterrows():
-                    status.text(f"Processing Row {idx+1}/{len(df_to_proc)}...")
-                    progress.progress((idx+1)/len(df_to_proc))
-                    
-                    img_url = str(row.get(img_col, "")).strip()
-                    if not img_url or img_url.lower() == "nan": 
-                        log.warning(f"Row {idx+1}: No URL"); continue
-
-                    # CACHE CHECK
-                    if img_url in cache:
-                        ai_data = cache[img_url]
-                    else:
-                        base64_img, err = encode_image_from_url(img_url)
-                        if err: log.error(f"Row {idx+1}: {err}"); continue
-
-                        hints = ", ".join([f"{k}: {v}" for k,v in row.items() if k != img_col and str(v) != "nan"])
+                # WRAP IN TRY/EXCEPT TO CATCH CRASHES WITHOUT LOSING DATA
+                try:
+                    for idx, row in df_to_proc.iterrows():
+                        row_num = idx + 1
+                        total_rows = len(df_to_proc)
                         
-                        # --- RETRY LOGIC (RATE LIMIT GUARD) ---
-                        max_retries = 3
-                        attempt = 0
-                        success = False
+                        status_text.markdown(f"**Processing Row {row_num} / {total_rows}**")
+                        progress_bar.progress(row_num / total_rows)
                         
-                        while attempt < max_retries and not success:
-                            try:
-                                if "Maker-Checker" in arch_mode:
-                                    ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
-                                else:
-                                    model_key = "GPT" if "GPT" in arch_mode else "Gemini"
-                                    # Note: Ensure analyze_image_single exists or is imported if using single mode
-                                    # For V11.0.9 we focus on Maker-Checker
-                                    ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
-
-                                # ERROR HANDLING FOR API LIMITS
-                                if err:
-                                    # Check for 429/Quota errors in the error string
-                                    err_str = str(err).lower()
-                                    if "429" in err_str or "quota" in err_str or "resource exhausted" in err_str:
-                                        log.warning(f"⚠️ API Rate Limit hit on Row {idx+1}. Sleeping 60s... (Attempt {attempt+1}/{max_retries})")
-                                        time.sleep(60)
-                                        attempt += 1
-                                    else:
-                                        # Non-retryable error (e.g., bad image)
-                                        log.error(f"Row {idx+1} Error: {err}")
-                                        break
-                                else:
-                                    success = True
-                            except Exception as e:
-                                log.error(f"Critical Crash on Row {idx+1}: {str(e)}")
-                                break
+                        img_url = str(row.get(img_col, "")).strip()
                         
-                        if success and ai_data:
-                            cache[img_url] = ai_data
-                        else:
-                            # If we exhausted retries or hit a hard error, skip logic
-                            log.error(f"❌ Failed Row {idx+1} after retries.")
+                        # 1. VALIDATION
+                        if not img_url or img_url.lower() == "nan": 
+                            log_container.warning(f"⚠️ Row {row_num}: Skipped (No URL)")
                             continue
-                        # --------------------------------------
 
-                    # MAP DATA TO COLUMNS
-                    new_row = {}
-                    for col in config['headers']:
-                        rule = mapping.get(col, {'source': 'BLANK'})
-                        val = ""
+                        # 2. GENERATION (With Retry Logic)
+                        ai_data = None
                         
-                        if rule['source'] == 'INPUT': val = row.get(col, "")
-                        elif rule['source'] == 'FIXED': val = rule['value']
-                        elif rule['source'] == 'AI' and ai_data:
-                            # KEY MATCHING (PARTIAL/FUZZY)
-                            if col in ai_data: val = ai_data[col]
-                            else: 
-                                clean_col = col.lower().replace(" ", "").replace("_", "")
-                                best_match = None
-                                for k,v in ai_data.items():
-                                    clean_k = k.lower().replace(" ", "").replace("_", "")
-                                    if clean_k in clean_col or clean_col in clean_k:
-                                        best_match = v; break
-                                val = best_match if best_match else ""
+                        # Check Cache
+                        if img_url in cache:
+                            ai_data = cache[img_url]
+                            log_container.info(f"✅ Row {row_num}: Loaded from Cache")
+                        else:
+                            # Retry Loop for API Limits
+                            max_retries = 3
+                            for attempt in range(max_retries):
+                                try:
+                                    base64_img, err = encode_image_from_url(img_url)
+                                    if err: raise Exception(f"Image Error: {err}")
+
+                                    hints = ", ".join([f"{k}: {v}" for k,v in row.items() if k != img_col and str(v) != "nan"])
+                                    
+                                    if "Maker-Checker" in arch_mode:
+                                        ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
+                                    else:
+                                        # Fallback to single mode if needed (assuming function exists, otherwise default to none)
+                                        ai_data = {} 
+                                        err = "Single mode not fully implemented in this patch, select Maker-Checker"
+
+                                    if err:
+                                        # API RATE LIMIT HANDLER
+                                        if "429" in str(err) or "quota" in str(err).lower():
+                                            log_container.warning(f"⏳ Row {row_num}: API Limit Hit (429). Sleeping 60s... (Attempt {attempt+1})")
+                                            time.sleep(60)
+                                            continue # Retry loop
+                                        else:
+                                            raise Exception(err)
+                                    
+                                    # If success
+                                    cache[img_url] = ai_data
+                                    break # Exit retry loop
+
+                                except Exception as e:
+                                    if attempt == max_retries - 1:
+                                        log_container.error(f"❌ Row {row_num}: Failed after retries. Error: {str(e)}")
+                                    else:
+                                        # If it's not a rate limit, maybe a glitch, wait 2s and retry
+                                        time.sleep(2)
+
+                        # 3. MAPPING & SAVING
+                        new_row = {}
+                        # Always preserve Input columns first
+                        for c in df_input.columns:
+                            new_row[c] = row[c]
+
+                        # Then add Generated columns
+                        for col in config['headers']:
+                            rule = mapping.get(col, {'source': 'BLANK'})
+                            val = ""
                             
-                            # MASTER DATA ENFORCEMENT
-                            m_list = []
-                            for mc, opts in config['master_data'].items():
-                                if mc.lower() in col.lower() or col.lower() in mc.lower(): m_list = opts; break
-                            if m_list and val: val = enforce_master_data_fallback(val, m_list)
+                            if rule['source'] == 'INPUT': val = row.get(col, "")
+                            elif rule['source'] == 'FIXED': val = rule['value']
+                            elif rule['source'] == 'AI' and ai_data:
+                                if col in ai_data: val = ai_data[col]
+                                else: 
+                                    # Fuzzy Match Key
+                                    clean_col = col.lower().replace(" ", "").replace("_", "")
+                                    for k,v in ai_data.items():
+                                        if k.lower().replace(" ", "") in clean_col:
+                                            val = v; break
+                                
+                                # Master Data Force
+                                m_list = []
+                                for mc, opts in config['master_data'].items():
+                                    if mc.lower() in col.lower(): m_list = opts; break
+                                if m_list and val: val = enforce_master_data_fallback(val, m_list)
+                            
+                            if rule.get('max_len'): val = smart_truncate(val, int(rule['max_len']))
+                            new_row[col] = val
                         
-                        if rule.get('max_len'): val = smart_truncate(val, rule['max_len'])
-                        new_row[col] = val
-                    
-                    final_rows.append(new_row)
-                    # Brief pause between successful rows to be polite to API
-                    time.sleep(0.5) 
-                # --- END OF HARDENED BATCH LOOP ---                
-                output_gen = BytesIO()
-                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: pd.DataFrame(final_rows).to_excel(writer, index=False)
-                st.success("✅ Done!")
-                st.download_button("⬇️ Result", output_gen.getvalue(), file_name="Generated_V11.xlsx")
+                        # 4. UPDATE STATE & UI IMMEDIATELY
+                        st.session_state.gen_results.append(new_row)
+                        
+                        # Update the table on screen so user sees progress
+                        current_df = pd.DataFrame(st.session_state.gen_results)
+                        data_preview.dataframe(current_df.tail(3)) # Show last 3 rows added
+                
+                except Exception as critical_e:
+                    st.error(f"💀 CRITICAL SCRIPT CRASH: {str(critical_e)}")
+                    log_container.exception(critical_e)
+                
+                finally:
+                    st.success("🏁 Process Cycle Ended")
 
+            # --- DISPLAY RESULTS & DOWNLOAD (Always visible if data exists) ---
+            if "gen_results" in st.session_state and len(st.session_state.gen_results) > 0:
+                st.divider()
+                st.header("💾 Results")
+                
+                final_df = pd.DataFrame(st.session_state.gen_results)
+                st.write(f"captured {len(final_df)} rows.")
+                st.dataframe(final_df) # Show full data
+                
+                output_gen = BytesIO()
+                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
+                    final_df.to_excel(writer, index=False)
+                
+                st.download_button(
+                    "⬇️ Download Generated Excel", 
+                    output_gen.getvalue(), 
+                    file_name=f"Generated_{len(final_df)}_Rows.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
     # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🛠️ Media Tools")
