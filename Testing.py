@@ -506,138 +506,169 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
- # --- TAB 3: RUN (Testing Environment - Smart Dedupe Edition) ---
+ # --- TAB 3: RUN (Phase 3: Vision Dashboard Edition) ---
     with tabs[2]:
-        st.header(f"3. Run {selected_mp} Generator")
-        if not mp_cats: st.warning("No categories configured."); st.stop()
+        st.header(f"🚀 {selected_mp} Generator Operations")
         
-        run_cat = st.selectbox("Select Category", mp_cats, key="run")
-        config = load_config(selected_mp, run_cat)
+        # 1. PRE-FLIGHT CHECKS
+        if not mp_cats: 
+            st.warning("⚠️ No categories configured. Please go to 'Setup' first.")
+            st.stop()
         
-        if config:
-            # STRICT TEMPLATE LOGIC
-            req_cols = config['headers']
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer: pd.DataFrame(columns=req_cols).to_excel(writer, index=False)
-            st.download_button("📥 Download Template", output.getvalue(), file_name=f"Template_{run_cat}.xlsx")
+        c_config1, c_config2 = st.columns([1, 2])
+        with c_config1:
+            run_cat = st.selectbox("Select Category", mp_cats, key="run")
+            config = load_config(selected_mp, run_cat)
+            
+            if config:
+                req_cols = config['headers']
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: pd.DataFrame(columns=req_cols).to_excel(writer, index=False)
+                st.download_button("📥 Download Template", output.getvalue(), file_name=f"Template_{run_cat}.xlsx", use_container_width=True)
+
+        with c_config2:
+            st.info(f"**Active Rules:** {len(config.get('column_mapping', {}))} Columns Mapped | **Master Data:** {len(config.get('master_data', {}))} Lists Enforced")
 
         active_kws = get_seo(selected_mp, run_cat)
-        input_file = st.file_uploader("Upload Data", type=["xlsx"], key="run_in")
+        
+        st.divider()
+        
+        # 2. DATA UPLOAD & SETTINGS
+        input_file = st.file_uploader("📂 Upload Input File (.xlsx)", type=["xlsx"], key="run_in")
         
         if input_file and config:
             df_input = pd.read_excel(input_file)
-            st.divider()
             
-            c_run1, c_run2, c_run3 = st.columns(3)
-            with c_run1:
-                run_mode = st.radio("Run Scope", ["🧪 Test (First 3 Rows)", "🚀 Production (All Rows)"])
-            with c_run2:
-                # ADDED GPT-4o-mini option for speed/cost savings
-                arch_mode = st.selectbox("AI Architecture", ["✨ Dual-AI (Maker-Checker)", "⚡ Gemini Only (Fast)", "🧠 GPT-4o Only (Precise)", "🔹 Dual-AI (Maker + GPT-4o-Mini)"])
-            with c_run3:
-                cols = [c for c in df_input.columns if "url" in c.lower() or "image" in c.lower()]
-                img_col = st.selectbox("Image Column", df_input.columns, index=df_input.columns.get_loc(cols[0]) if cols else 0)
+            with st.expander("⚙️ Run Settings", expanded=True):
+                c_set1, c_set2, c_set3 = st.columns(3)
+                with c_set1:
+                    run_mode = st.radio("Run Scope", ["🧪 Test (First 3 Rows)", "🚀 Production (All Rows)"])
+                with c_set2:
+                    arch_mode = st.selectbox("AI Architecture", ["✨ Dual-AI (Maker-Checker)", "⚡ Gemini Only (Fast)", "🧠 GPT-4o Only (Precise)"])
+                with c_set3:
+                    cols = [c for c in df_input.columns if "url" in c.lower() or "image" in c.lower()]
+                    img_col = st.selectbox("Image Column", df_input.columns, index=df_input.columns.get_loc(cols[0]) if cols else 0)
 
-            # PREPARE DATA
+            # PRE-PROCESS ANALYSIS
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
-            
-            # 1. IDENTIFY UNIQUE IMAGES
-            # We strip whitespace to ensure ' url ' matches 'url'
             unique_urls = df_to_proc[img_col].astype(str).str.strip().unique()
             unique_urls = [u for u in unique_urls if u.lower() != "nan" and u != ""]
             
-            # COST ESTIMATION
-            # Checker Cost: GPT-4o (~$0.03) vs GPT-4o-Mini (~$0.001)
+            # COST MATH
             is_mini = "Mini" in arch_mode
             checker_cost = 0.001 if is_mini else 0.03
-            maker_cost = 0.002 # Gemini Flash
-            
+            maker_cost = 0.002
             cost_per_image = maker_cost + checker_cost if "Dual-AI" in arch_mode else (checker_cost if "GPT" in arch_mode else maker_cost)
             total_est_cost = len(unique_urls) * cost_per_image
-            
-            st.info(f"📋 **Smart Batch Analysis:** Found **{len(df_to_proc)}** Rows, but only **{len(unique_urls)}** Unique Images.")
-            st.metric("Est. Cost (Optimized)", f"${total_est_cost:.4f}", help=f"Savings: You are paying for {len(unique_urls)} images instead of {len(df_to_proc)} rows.")
 
-            # --- START OF SMART BATCH BLOCK ---
-            
-            if "gen_results" not in st.session_state:
-                st.session_state.gen_results = []
-            
-            if st.button("▶️ Start Smart Generation"):
+            # DASHBOARD METRICS
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Rows to Fill", len(df_to_proc))
+            m2.metric("Unique Images", len(unique_urls), delta=f"Saved {len(df_to_proc)-len(unique_urls)} API Calls")
+            m3.metric("Est. Cost", f"${total_est_cost:.3f}")
+
+            # --- EXECUTION BUTTON ---
+            if st.button("▶️ START ENGINE", type="primary", use_container_width=True):
                 st.session_state.gen_results = [] 
                 
-                # UI Containers
-                st.write("### 🧠 Phase 1: Processing Unique Images")
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                log_container = st.container(height=200) 
+                # UI LAYOUT FOR PROCESSING
+                st.write("### 👁️ Live Vision Dashboard")
                 
-                # PROCESSING CACHE (The Brain)
-                image_knowledge_base = {} # Stores {url: ai_data}
+                # Split screen: Left for Progress, Right for Visuals
+                c_prog, c_vis = st.columns([1, 1])
+                
+                with c_prog:
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    log_expander = st.expander("📜 Detailed Logs", expanded=False)
+                    log_container = log_expander.container(height=150)
+                
+                with c_vis:
+                    img_preview = st.empty()
+                    ai_status_badge = st.empty()
+
+                # LOGIC
+                image_knowledge_base = {} 
+                mapping = config['column_mapping']
                 
                 try:
-                    # LOOP THROUGH UNIQUE IMAGES ONLY
+                    # === PHASE 1: IMAGE PROCESSING ===
                     for i, u_url in enumerate(unique_urls):
                         img_num = i + 1
                         total_imgs = len(unique_urls)
                         
-                        status_text.markdown(f"**Analyzing Image {img_num} / {total_imgs}**")
+                        # UI Update
+                        status_text.markdown(f"**Analyzing Image {img_num}/{total_imgs}**")
                         progress_bar.progress(img_num / total_imgs)
+                        ai_status_badge.info("⏳ Downloading...")
                         
-                        # --- AI CALL LOGIC ---
+                        # 1. Download & Display
+                        base64_img = None
+                        try:
+                            # We get the raw bytes to display in Streamlit, then base64 for API
+                            if "http" in u_url:
+                                if "dropbox" in u_url: u_url = u_url.replace("?dl=0", "").replace("&dl=0", "") + "&dl=1"
+                                response = requests.get(u_url, timeout=10)
+                                if response.status_code == 200:
+                                    img_data = response.content
+                                    # Show Image on Dashboard
+                                    img_preview.image(img_data, caption=f"Image {img_num}", width=200)
+                                    base64_img = base64.b64encode(img_data).decode('utf-8')
+                            
+                            if not base64_img: raise Exception("Download failed")
+
+                        except Exception as e:
+                            log_container.warning(f"Could not download {u_url}: {e}")
+                            img_preview.error("❌ Image Broken")
+                            continue
+
+                        # 2. AI Analysis
+                        ai_status_badge.warning("🤖 AI Working... (Maker & Checker)")
+                        
                         ai_data = None
-                        
-                        # Retry Loop
                         max_retries = 3
+                        
+                        # Find Hints
+                        sample_row = df_to_proc[df_to_proc[img_col].astype(str).str.strip() == u_url].iloc[0]
+                        hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v) != "nan"])
+                        hints = smart_truncate(hints, 300) # Keep hints concise
+
                         for attempt in range(max_retries):
                             try:
-                                base64_img, err = encode_image_from_url(u_url)
-                                if err: raise Exception(f"Image Error: {err}")
-
-                                # FIND HINTS: We grab the FIRST row that matches this URL to get hints (Title, etc)
-                                # This helps the AI context even if we are processing the image in isolation
-                                sample_row = df_to_proc[df_to_proc[img_col].astype(str).str.strip() == u_url].iloc[0]
-                                hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v) != "nan"])
-
                                 if "Dual-AI" in arch_mode:
-                                    # Handle Mini Switch
-                                    # Temporarily swap client model if needed (Conceptual, requires updating the analyze function to support model selection parameter)
-                                    # For now, we assume standard Dual-AI logic, but if you want Mini, we can tweak analyze_image_maker_checker or just rely on 4o for now to keep stable.
-                                    # UPDATE: To support Mini, strict logic would be needed. For now, sticking to Stable Code to prevent logic breaks.
                                     ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
                                 else:
                                     # Fallback
                                     ai_data = {}
-                                    err = "Please select Dual-AI"
+                                    err = "Mode not selected"
 
                                 if err:
                                     if "429" in str(err) or "quota" in str(err).lower():
-                                        log_container.warning(f"⏳ API Limit Hit. Sleeping 60s... (Attempt {attempt+1})")
+                                        log_container.warning(f"Retry {attempt+1}/{max_retries} (Rate Limit)...")
                                         time.sleep(60)
                                         continue 
                                     else:
                                         raise Exception(err)
                                 
                                 image_knowledge_base[u_url] = ai_data
-                                log_container.success(f"✅ Image {img_num} Processed")
+                                ai_status_badge.success("✅ Analysis Complete")
+                                log_container.success(f"Image {img_num} Done")
                                 break 
 
                             except Exception as e:
                                 if attempt == max_retries - 1:
-                                    log_container.error(f"❌ Image {img_num} Failed: {str(e)}")
+                                    log_container.error(f"Failed Img {img_num}: {str(e)}")
                                 time.sleep(2)
-                        # ---------------------
-                        time.sleep(0.5) # Politeness delay
+                        
+                        time.sleep(0.5)
 
-                    # PHASE 2: MAPPING TO ROWS
-                    st.write("### 🚀 Phase 2: Mapping to Rows")
-                    mapping = config['column_mapping']
-                    
+                    # === PHASE 2: DATA MAPPING ===
+                    status_text.markdown("**🚀 Phase 2: Mapping Data to Excel...**")
                     final_rows = []
                     
                     for idx, row in df_to_proc.iterrows():
                         u_key = str(row.get(img_col, "")).strip()
-                        ai_data = image_knowledge_base.get(u_key, {}) # Retrieve from Brain
+                        ai_data = image_knowledge_base.get(u_key, {})
                         
                         new_row = {}
                         for col in config['headers']:
@@ -670,31 +701,39 @@ else:
                         final_rows.append(new_row)
                     
                     st.session_state.gen_results = final_rows
-                    st.success("✅ Smart Batch Complete!")
+                    st.toast("Processing Complete!", icon="🎉")
 
                 except Exception as critical_e:
                     st.error(f"💀 CRITICAL ERROR: {str(critical_e)}")
                     log_container.exception(critical_e)
 
-            # --- RESULT DISPLAY ---
+            # --- RESULT DISPLAY (Tabbed View) ---
             if "gen_results" in st.session_state and len(st.session_state.gen_results) > 0:
                 st.divider()
-                st.header("💾 Final Results")
+                
+                res_tab1, res_tab2 = st.tabs(["📊 Success Data", "⚠️ Needs Attention"])
                 
                 final_df = pd.DataFrame(st.session_state.gen_results)
-                st.write(f"Processed {len(final_df)} rows (using {len(unique_urls)} AI calls).")
-                st.dataframe(final_df.astype(str))
                 
-                output_gen = BytesIO()
-                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
-                    final_df.to_excel(writer, index=False)
-                
-                st.download_button(
-                    "⬇️ Download Excel", 
-                    output_gen.getvalue(), 
-                    file_name=f"Smart_Generated_{len(final_df)}_Rows.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                with res_tab1:
+                    st.success(f"Successfully generated {len(final_df)} rows.")
+                    st.dataframe(final_df.astype(str), use_container_width=True)
+                    
+                    output_gen = BytesIO()
+                    with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
+                        final_df.to_excel(writer, index=False)
+                    
+                    st.download_button(
+                        "⬇️ Download Final Excel", 
+                        output_gen.getvalue(), 
+                        file_name=f"{selected_mp}_Generated_{len(final_df)}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+
+                with res_tab2:
+                    # Logic to find empty AI columns could go here
+                    st.info("Coming Soon: Auto-detection of rows where AI failed to produce data.")
     # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🛠️ Media Tools")
