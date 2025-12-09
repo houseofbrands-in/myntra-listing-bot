@@ -549,6 +549,7 @@ else:
                 cache = {}
                 mapping = config['column_mapping']
 
+                # --- START OF HARDENED BATCH LOOP ---
                 for idx, row in df_to_proc.iterrows():
                     status.text(f"Processing Row {idx+1}/{len(df_to_proc)}...")
                     progress.progress((idx+1)/len(df_to_proc))
@@ -557,23 +558,57 @@ else:
                     if not img_url or img_url.lower() == "nan": 
                         log.warning(f"Row {idx+1}: No URL"); continue
 
-                    ai_data = None
-                    if img_url in cache: ai_data = cache[img_url]
+                    # CACHE CHECK
+                    if img_url in cache:
+                        ai_data = cache[img_url]
                     else:
                         base64_img, err = encode_image_from_url(img_url)
                         if err: log.error(f"Row {idx+1}: {err}"); continue
 
                         hints = ", ".join([f"{k}: {v}" for k,v in row.items() if k != img_col and str(v) != "nan"])
                         
-                        if "Maker-Checker" in arch_mode:
-                            ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
+                        # --- RETRY LOGIC (RATE LIMIT GUARD) ---
+                        max_retries = 3
+                        attempt = 0
+                        success = False
+                        
+                        while attempt < max_retries and not success:
+                            try:
+                                if "Maker-Checker" in arch_mode:
+                                    ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
+                                else:
+                                    model_key = "GPT" if "GPT" in arch_mode else "Gemini"
+                                    # Note: Ensure analyze_image_single exists or is imported if using single mode
+                                    # For V11.0.9 we focus on Maker-Checker
+                                    ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
+
+                                # ERROR HANDLING FOR API LIMITS
+                                if err:
+                                    # Check for 429/Quota errors in the error string
+                                    err_str = str(err).lower()
+                                    if "429" in err_str or "quota" in err_str or "resource exhausted" in err_str:
+                                        log.warning(f"⚠️ API Rate Limit hit on Row {idx+1}. Sleeping 60s... (Attempt {attempt+1}/{max_retries})")
+                                        time.sleep(60)
+                                        attempt += 1
+                                    else:
+                                        # Non-retryable error (e.g., bad image)
+                                        log.error(f"Row {idx+1} Error: {err}")
+                                        break
+                                else:
+                                    success = True
+                            except Exception as e:
+                                log.error(f"Critical Crash on Row {idx+1}: {str(e)}")
+                                break
+                        
+                        if success and ai_data:
+                            cache[img_url] = ai_data
                         else:
-                            model_key = "GPT" if "GPT" in arch_mode else "Gemini"
-                            ai_data, err = analyze_image_single(model_key, client, base64_img, hints, active_kws, config, selected_mp)
+                            # If we exhausted retries or hit a hard error, skip logic
+                            log.error(f"❌ Failed Row {idx+1} after retries.")
+                            continue
+                        # --------------------------------------
 
-                        if ai_data: cache[img_url] = ai_data
-                        else: log.error(f"Row {idx+1} Failed: {err}")
-
+                    # MAP DATA TO COLUMNS
                     new_row = {}
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
@@ -603,7 +638,9 @@ else:
                         new_row[col] = val
                     
                     final_rows.append(new_row)
-                
+                    # Brief pause between successful rows to be polite to API
+                    time.sleep(0.5) 
+                # --- END OF HARDENED BATCH LOOP ---                
                 output_gen = BytesIO()
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: pd.DataFrame(final_rows).to_excel(writer, index=False)
                 st.success("✅ Done!")
