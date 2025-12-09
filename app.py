@@ -274,24 +274,46 @@ def run_lyra_optimization(model_choice, raw_instruction):
             return response.text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- V11.0.6: MAKER-CHECKER (CHEAT SHEET MODE) ---
+# --- V11.0.7: MAKER-CHECKER (BEST MATCH MAPPING) ---
 def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
     # PREPARE DATA
     target_columns = []
     strict_constraints = {} # For Technical Fields (Dropdowns)
     creative_columns = []   # For Copy Fields (Title/Desc)
     
+    # 1. INTELLIGENT MAPPING (The Fix for "Midi" in "Sleeve Length")
+    # We loop through Target Columns first, then find the BEST Master Data match for each.
     for col, settings in config['column_mapping'].items():
         if settings['source'] == 'AI':
             target_columns.append(col)
-            # Check if this is a Master Data (Technical) field
-            is_technical = False
-            for master_col, opts in config['master_data'].items():
+            
+            # Find the "Best" Master Data List for this column
+            best_match_key = None
+            best_match_len = -1
+            
+            for master_col in config['master_data'].keys():
+                # Check for substring match (e.g. "Length" in "Sleeve Length")
                 if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                    strict_constraints[col] = opts
-                    is_technical = True
-                    break
-            if not is_technical:
+                    # SCORE THE MATCH: Longer match = More specific = Better
+                    # "Sleeve Length" (13 chars) > "Length" (6 chars)
+                    current_len = len(master_col)
+                    
+                    if current_len > best_match_len:
+                        best_match_len = current_len
+                        best_match_key = master_col
+                    
+                    # Tie-Breaker: If lengths are equal (e.g. "Sleeve" vs "Length"), 
+                    # prefer the one that isn't a generic word.
+                    elif current_len == best_match_len:
+                        generic_terms = ["length", "type", "style", "category", "fabric"]
+                        if master_col.lower() not in generic_terms:
+                            best_match_key = master_col
+
+            if best_match_key:
+                # We found a specific master list for this column
+                strict_constraints[col] = config['master_data'][best_match_key]
+            else:
+                # No master data found, treat as Creative Column
                 creative_columns.append(col)
     
     # PHASE 1: MAKER (GEMINI) - WITH CHEAT SHEET
@@ -309,7 +331,7 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
         
         SECTION A: TECHNICAL FACTS (Strict Selection)
         - You MUST select values ONLY from the provided options below.
-        - Do NOT invent new words (e.g., do not say "Printed" if the list has "Floral").
+        - Do NOT invent new words.
         - ALLOWED OPTIONS: {json.dumps(strict_constraints)}
         
         SECTION B: CREATIVE COPY (Be Engaging)
@@ -370,59 +392,6 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
 
     except Exception as e:
         return None, f"Checker Failed: {str(e)}"
-        # --- LEGACY SINGLE MODEL ---
-def analyze_image_single(model_choice, client, base64_image, user_hints, keywords, config, marketplace):
-    tech_cols = []
-    target_definitions = []
-    relevant_options = {}
-
-    for col, settings in config['column_mapping'].items():
-        if settings['source'] != 'AI': continue
-        custom_prompt = settings.get('custom_prompt', '')
-        style_pref = settings.get('prompt_style', 'Standard (Auto)')
-        
-        if custom_prompt: style_instr = f"USER RULE: {custom_prompt}"
-        elif "Creative" in style_pref: style_instr = "Style: Creative, Sales-driven."
-        elif "Technical" in style_pref: style_instr = "Style: Technical, Factual."
-        else: style_instr = "Style: Standard."
-
-        m_opts = []
-        for master_col, opts in config['master_data'].items():
-            if master_col.lower() in col.lower() or col.lower() in master_col.lower():
-                m_opts = opts
-                break
-        
-        if m_opts:
-            relevant_options[col] = m_opts
-            target_definitions.append(f"Field '{col}': MUST be one of {json.dumps(m_opts)}")
-        else:
-            target_definitions.append(f"Field '{col}': {style_instr}")
-
-    try:
-        if "GPT" in model_choice:
-            prompt = f"Marketplace: {marketplace}. Hints: {user_hints}. SEO: {keywords}. Generate JSON for:\n{chr(10).join(target_definitions)}"
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "JSON Assistant."},
-                    {"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
-                ],
-                response_format={"type": "json_object"}
-            )
-            return json.loads(response.choices[0].message.content), None
-        
-        elif "Gemini" in model_choice:
-            if not GEMINI_AVAILABLE: return None, "Gemini Key Missing"
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            img_data = base64.b64decode(base64_image)
-            prompt = f"Generate JSON for {marketplace}.\n{chr(10).join(target_definitions)}\nHints: {user_hints}"
-            response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_data}])
-            text = response.text
-            if "```json" in text: text = text.split("```json")[1].split("```")[0]
-            return json.loads(text), None
-
-    except Exception as e: return None, str(e)
-
 # ==========================================
 # 3. MAIN APP UI
 # ==========================================
@@ -676,6 +645,7 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
+
 
 
 
