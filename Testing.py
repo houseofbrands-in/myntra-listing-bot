@@ -506,7 +506,7 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
- # --- TAB 3: RUN (Phase 3: Vision Dashboard Edition) ---
+ # --- TAB 3: RUN (Phase 3: Final Fixed Dashboard) ---
     with tabs[2]:
         st.header(f"🚀 {selected_mp} Generator Operations")
         
@@ -551,7 +551,11 @@ else:
 
             # PRE-PROCESS ANALYSIS
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
-            unique_urls = df_to_proc[img_col].astype(str).str.strip().unique()
+            
+            # CRITICAL: Strip whitespace to ensure keys match perfectly
+            df_to_proc[img_col] = df_to_proc[img_col].astype(str).str.strip()
+            
+            unique_urls = df_to_proc[img_col].unique()
             unique_urls = [u for u in unique_urls if u.lower() != "nan" and u != ""]
             
             # COST MATH
@@ -571,10 +575,8 @@ else:
             if st.button("▶️ START ENGINE", type="primary", use_container_width=True):
                 st.session_state.gen_results = [] 
                 
-                # UI LAYOUT FOR PROCESSING
+                # UI LAYOUT
                 st.write("### 👁️ Live Vision Dashboard")
-                
-                # Split screen: Left for Progress, Right for Visuals
                 c_prog, c_vis = st.columns([1, 1])
                 
                 with c_prog:
@@ -587,13 +589,12 @@ else:
                     img_preview = st.empty()
                     ai_status_badge = st.empty()
 
-                # LOGIC
                 image_knowledge_base = {} 
                 mapping = config['column_mapping']
                 
                 try:
                     # === PHASE 1: IMAGE PROCESSING ===
-                    for i, u_url in enumerate(unique_urls):
+                    for i, u_key in enumerate(unique_urls):
                         img_num = i + 1
                         total_imgs = len(unique_urls)
                         
@@ -602,71 +603,69 @@ else:
                         progress_bar.progress(img_num / total_imgs)
                         ai_status_badge.info("⏳ Downloading...")
                         
-                        # 1. Download & Display
+                        # 1. PREPARE DOWNLOAD URL (Separate from Key)
+                        download_url = u_key # Start with the key
+                        if "dropbox.com" in download_url:
+                            # Fix Dropbox links for downloading only
+                            download_url = download_url.replace("?dl=0", "").replace("&dl=0", "") + ("&dl=1" if "?" in download_url else "?dl=1")
+                        
+                        # 2. DOWNLOAD
                         base64_img = None
                         try:
-                            # We get the raw bytes to display in Streamlit, then base64 for API
-                            if "http" in u_url:
-                                if "dropbox" in u_url: u_url = u_url.replace("?dl=0", "").replace("&dl=0", "") + "&dl=1"
-                                response = requests.get(u_url, timeout=10)
-                                if response.status_code == 200:
-                                    img_data = response.content
-                                    # Show Image on Dashboard
-                                    img_preview.image(img_data, caption=f"Image {img_num}", width=200)
-                                    base64_img = base64.b64encode(img_data).decode('utf-8')
-                            
-                            if not base64_img: raise Exception("Download failed")
-
+                            # Use download_url for network, u_key for database
+                            response = requests.get(download_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                            if response.status_code == 200:
+                                img_data = response.content
+                                img_preview.image(img_data, caption=f"Processing...", width=200)
+                                base64_img = base64.b64encode(img_data).decode('utf-8')
+                            else:
+                                raise Exception(f"Status {response.status_code}")
                         except Exception as e:
-                            log_container.warning(f"Could not download {u_url}: {e}")
-                            img_preview.error("❌ Image Broken")
+                            log_container.warning(f"Download fail: {e}")
+                            img_preview.error("❌ Image Error")
                             continue
 
-                        # 2. AI Analysis
-                        ai_status_badge.warning("🤖 AI Working... (Maker & Checker)")
-                        
-                        ai_data = None
-                        max_retries = 3
-                        
-                        # --- SAFE HINT EXTRACTION (Crash Proof) ---
-                        hints = "Product image analysis." # Default fallback
+                        # 3. SAFE HINT EXTRACTION (Uses u_key, not download_url)
+                        hints = "Product analysis."
                         try:
-                            # Create a boolean mask to find the row safely
-                            mask = df_to_proc[img_col].astype(str).str.strip() == u_url
+                            # Exact match because we stripped both earlier
+                            mask = df_to_proc[img_col] == u_key
                             matching_rows = df_to_proc[mask]
-                            
                             if not matching_rows.empty:
                                 sample_row = matching_rows.iloc[0]
-                                # Extract hints from the found row
                                 hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v).lower() != "nan"])
                                 hints = smart_truncate(hints, 300)
                             else:
-                                # This handles the edge case where the match fails
-                                log_container.warning(f"⚠️ Could not retrieve hints for Image {img_num}, proceeding with visual analysis only.")
-                        except Exception as hint_error:
-                            log_container.warning(f"⚠️ Hint Error on Img {img_num}: {str(hint_error)}")
-                        # ------------------------------------------
+                                log_container.warning(f"Note: No hint data found for image key.")
+                        except Exception as e:
+                            log_container.warning(f"Hint warning: {e}")
 
+                        # 4. AI ANALYSIS
+                        ai_status_badge.warning("🤖 AI Working... (Maker & Checker)")
+                        ai_data = None
+                        max_retries = 3
+                        
                         for attempt in range(max_retries):
                             try:
                                 if "Dual-AI" in arch_mode:
                                     ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
                                 else:
-                                    # Fallback
+                                    # Basic fallback if needed
                                     ai_data = {}
-                                    err = "Mode not selected"
+                                    err = "Select Dual-AI"
 
                                 if err:
                                     if "429" in str(err) or "quota" in str(err).lower():
-                                        log_container.warning(f"Retry {attempt+1}/{max_retries} (Rate Limit)...")
+                                        log_container.warning(f"Rate Limit 429. Sleeping 60s... (Retry {attempt+1})")
                                         time.sleep(60)
                                         continue 
                                     else:
                                         raise Exception(err)
                                 
-                                image_knowledge_base[u_url] = ai_data
+                                # SUCCESS: Store using the ORIGINAL u_key
+                                image_knowledge_base[u_key] = ai_data
                                 ai_status_badge.success("✅ Analysis Complete")
-                                log_container.success(f"Image {img_num} Done")
+                                log_container.success(f"Image {img_num} Processed")
                                 break 
 
                             except Exception as e:
@@ -681,7 +680,10 @@ else:
                     final_rows = []
                     
                     for idx, row in df_to_proc.iterrows():
+                        # Use the exact same key logic
                         u_key = str(row.get(img_col, "")).strip()
+                        
+                        # Retrieve data using the original key
                         ai_data = image_knowledge_base.get(u_key, {})
                         
                         new_row = {}
@@ -721,7 +723,7 @@ else:
                     st.error(f"💀 CRITICAL ERROR: {str(critical_e)}")
                     log_container.exception(critical_e)
 
-            # --- RESULT DISPLAY (Tabbed View) ---
+            # --- RESULT DISPLAY ---
             if "gen_results" in st.session_state and len(st.session_state.gen_results) > 0:
                 st.divider()
                 
@@ -746,8 +748,7 @@ else:
                     )
 
                 with res_tab2:
-                    # Logic to find empty AI columns could go here
-                    st.info("Coming Soon: Auto-detection of rows where AI failed to produce data.")
+                    st.info("Rows with missing images or data will be flagged here in future updates.")
     # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🛠️ Media Tools")
