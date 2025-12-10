@@ -52,7 +52,7 @@ def get_worksheet_data(sheet_name, worksheet_name):
         return ws.get_all_values()
     except: return []
 
-SHEET_NAME = "Agency_OS_Database"
+SHEET_NAME = "Testing_Agency_OS_Database"
 
 try:
     # OpenAI
@@ -506,109 +506,262 @@ else:
                 if save_seo(selected_mp, seo_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()):
                     st.success("Updated!"); time.sleep(1); st.rerun()
 
-    # --- TAB 3: RUN ---
+ # --- TAB 3: RUN (Phase 3: Final Polish - SKU Edition) ---
     with tabs[2]:
-        st.header(f"3. Run {selected_mp} Generator")
-        if not mp_cats: st.warning("No categories configured."); st.stop()
+        st.header(f"🚀 {selected_mp} Generator Operations")
         
-        run_cat = st.selectbox("Select Category", mp_cats, key="run")
-        config = load_config(selected_mp, run_cat)
+        # 1. PRE-FLIGHT CHECKS
+        if not mp_cats: 
+            st.warning("⚠️ No categories configured. Please go to 'Setup' first.")
+            st.stop()
         
-        if config:
-            req_cols = ["Image URL"] + [c for c, r in config.get('column_mapping', {}).items() if r.get('source') == 'INPUT']
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer: pd.DataFrame(columns=req_cols).to_excel(writer, index=False)
-            st.download_button("📥 Download Template", output.getvalue(), file_name=f"Template_{run_cat}.xlsx")
+        c_config1, c_config2 = st.columns([1, 2])
+        with c_config1:
+            run_cat = st.selectbox("Select Category", mp_cats, key="run")
+            config = load_config(selected_mp, run_cat)
+            
+            if config:
+                req_cols = config['headers']
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: pd.DataFrame(columns=req_cols).to_excel(writer, index=False)
+                st.download_button("📥 Download Template", output.getvalue(), file_name=f"Template_{run_cat}.xlsx", use_container_width=True)
+
+        with c_config2:
+            st.info(f"**Active Rules:** {len(config.get('column_mapping', {}))} Columns Mapped | **Master Data:** {len(config.get('master_data', {}))} Lists Enforced")
 
         active_kws = get_seo(selected_mp, run_cat)
-        input_file = st.file_uploader("Upload Data", type=["xlsx"], key="run_in")
+        
+        st.divider()
+        
+        # 2. DATA UPLOAD & SETTINGS
+        input_file = st.file_uploader("📂 Upload Input File (.xlsx)", type=["xlsx"], key="run_in")
         
         if input_file and config:
             df_input = pd.read_excel(input_file)
-            st.divider()
             
-            c_run1, c_run2, c_run3 = st.columns(3)
-            with c_run1:
-                run_mode = st.radio("Run Scope", ["🧪 Test (First 3)", "🚀 Production (All)"])
-            with c_run2:
-                arch_mode = st.selectbox("AI Architecture", ["✨ Dual-AI (Maker-Checker)", "⚡ Gemini Only (Fast)", "🧠 GPT-4o Only (Precise)"])
-            with c_run3:
-                cols = [c for c in df_input.columns if "url" in c.lower() or "image" in c.lower()]
-                img_col = st.selectbox("Image Column", df_input.columns, index=df_input.columns.get_loc(cols[0]) if cols else 0)
+            with st.expander("⚙️ Run Settings", expanded=True):
+                c_set1, c_set2, c_set3 = st.columns(3)
+                with c_set1:
+                    run_mode = st.radio("Run Scope", ["🧪 Test (First 3 Rows)", "🚀 Production (All Rows)"])
+                with c_set2:
+                    arch_mode = st.selectbox("AI Architecture", ["✨ Dual-AI (Maker-Checker)", "⚡ Gemini Only (Fast)", "🧠 GPT-4o Only (Precise)"])
+                with c_set3:
+                    # SMART COLUMN DETECTION
+                    all_cols = df_input.columns.tolist()
+                    
+                    # 1. Image Column
+                    img_candidates = [c for c in all_cols if "url" in c.lower() or "image" in c.lower()]
+                    img_default = all_cols.index(img_candidates[0]) if img_candidates else 0
+                    img_col = st.selectbox("Image Column", all_cols, index=img_default)
+                    
+                    # 2. SKU/ID Column (New Feature)
+                    sku_candidates = [c for c in all_cols if "sku" in c.lower() or "style" in c.lower() or "design" in c.lower()]
+                    sku_default = all_cols.index(sku_candidates[0]) if sku_candidates else 0
+                    sku_col = st.selectbox("SKU/ID Column", all_cols, index=sku_default, help="Used for logging (e.g. 'Processed SKU-123')")
 
+            # PRE-PROCESS ANALYSIS
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
             
-            cost_per_row = 0.05 if "Maker-Checker" in arch_mode else 0.02 if "GPT" in arch_mode else 0.005
-            st.metric("Est. Cost", f"${len(df_to_proc) * cost_per_row:.3f}")
+            # Clean Keys
+            df_to_proc[img_col] = df_to_proc[img_col].astype(str).str.strip()
+            
+            unique_urls = df_to_proc[img_col].unique()
+            unique_urls = [u for u in unique_urls if u.lower() != "nan" and u != ""]
+            
+            # COST MATH
+            is_mini = "Mini" in arch_mode
+            checker_cost = 0.001 if is_mini else 0.03
+            maker_cost = 0.002
+            cost_per_image = maker_cost + checker_cost if "Dual-AI" in arch_mode else (checker_cost if "GPT" in arch_mode else maker_cost)
+            total_est_cost = len(unique_urls) * cost_per_image
 
-            if st.button("▶️ Start Generation"):
-                progress = st.progress(0)
-                status = st.empty()
-                log = st.empty()
-                final_rows = []
-                cache = {}
-                mapping = config['column_mapping']
+            # DASHBOARD METRICS
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Rows to Fill", len(df_to_proc))
+            m2.metric("Unique Images", len(unique_urls), delta=f"Saved {len(df_to_proc)-len(unique_urls)} API Calls")
+            m3.metric("Est. Cost", f"${total_est_cost:.3f}")
 
-                for idx, row in df_to_proc.iterrows():
-                    status.text(f"Processing Row {idx+1}/{len(df_to_proc)}...")
-                    progress.progress((idx+1)/len(df_to_proc))
-                    
-                    img_url = str(row.get(img_col, "")).strip()
-                    if not img_url or img_url.lower() == "nan": 
-                        log.warning(f"Row {idx+1}: No URL"); continue
-
-                    ai_data = None
-                    if img_url in cache: ai_data = cache[img_url]
-                    else:
-                        base64_img, err = encode_image_from_url(img_url)
-                        if err: log.error(f"Row {idx+1}: {err}"); continue
-
-                        hints = ", ".join([f"{k}: {v}" for k,v in row.items() if k != img_col and str(v) != "nan"])
-                        
-                        if "Maker-Checker" in arch_mode:
-                            ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
-                        else:
-                            model_key = "GPT" if "GPT" in arch_mode else "Gemini"
-                            ai_data, err = analyze_image_single(model_key, client, base64_img, hints, active_kws, config, selected_mp)
-
-                        if ai_data: cache[img_url] = ai_data
-                        else: log.error(f"Row {idx+1} Failed: {err}")
-
-                    new_row = {}
-                    for col in config['headers']:
-                        rule = mapping.get(col, {'source': 'BLANK'})
-                        val = ""
-                        
-                        if rule['source'] == 'INPUT': val = row.get(col, "")
-                        elif rule['source'] == 'FIXED': val = rule['value']
-                        elif rule['source'] == 'AI' and ai_data:
-                            # KEY MATCHING (PARTIAL/FUZZY)
-                            if col in ai_data: val = ai_data[col]
-                            else: 
-                                clean_col = col.lower().replace(" ", "").replace("_", "")
-                                best_match = None
-                                for k,v in ai_data.items():
-                                    clean_k = k.lower().replace(" ", "").replace("_", "")
-                                    if clean_k in clean_col or clean_col in clean_k:
-                                        best_match = v; break
-                                val = best_match if best_match else ""
-                            
-                            # MASTER DATA ENFORCEMENT
-                            m_list = []
-                            for mc, opts in config['master_data'].items():
-                                if mc.lower() in col.lower() or col.lower() in mc.lower(): m_list = opts; break
-                            if m_list and val: val = enforce_master_data_fallback(val, m_list)
-                        
-                        if rule.get('max_len'): val = smart_truncate(val, rule['max_len'])
-                        new_row[col] = val
-                    
-                    final_rows.append(new_row)
+            # --- EXECUTION BUTTON ---
+            if st.button("▶️ START ENGINE", type="primary", use_container_width=True):
+                st.session_state.gen_results = [] 
                 
-                output_gen = BytesIO()
-                with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: pd.DataFrame(final_rows).to_excel(writer, index=False)
-                st.success("✅ Done!")
-                st.download_button("⬇️ Result", output_gen.getvalue(), file_name="Generated_V11.xlsx")
+                # UI LAYOUT
+                st.write("### 👁️ Live Vision Dashboard")
+                c_prog, c_vis = st.columns([1, 1])
+                
+                with c_prog:
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    log_expander = st.expander("📜 Detailed Logs", expanded=True) # Expanded by default to see SKUs
+                    log_container = log_expander.container(height=200)
+                
+                with c_vis:
+                    img_preview = st.empty()
+                    ai_status_badge = st.empty()
 
+                image_knowledge_base = {} 
+                mapping = config['column_mapping']
+                
+                try:
+                    # === PHASE 1: IMAGE PROCESSING ===
+                    for i, u_key in enumerate(unique_urls):
+                        img_num = i + 1
+                        total_imgs = len(unique_urls)
+                        
+                        # GET SKU NAME FOR DISPLAY
+                        # Find the first row that matches this image to get the SKU Name
+                        sku_label = f"Image {img_num}"
+                        try:
+                            match_row = df_to_proc[df_to_proc[img_col] == u_key]
+                            if not match_row.empty:
+                                sku_label = str(match_row.iloc[0][sku_col])
+                        except: pass
+
+                        # UI Update
+                        status_text.markdown(f"**Analyzing: {sku_label}** ({img_num}/{total_imgs})")
+                        progress_bar.progress(img_num / total_imgs)
+                        ai_status_badge.info("⏳ Downloading...")
+                        
+                        # 1. DOWNLOAD PREP
+                        download_url = u_key 
+                        if "dropbox.com" in download_url:
+                            download_url = download_url.replace("?dl=0", "").replace("&dl=0", "") + ("&dl=1" if "?" in download_url else "?dl=1")
+                        
+                        # 2. DOWNLOAD & PREVIEW
+                        base64_img = None
+                        try:
+                            response = requests.get(download_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                            if response.status_code == 200:
+                                img_data = response.content
+                                # SHOW SKU IN CAPTION
+                                img_preview.image(img_data, caption=f"Analyzing: {sku_label}", width=250)
+                                base64_img = base64.b64encode(img_data).decode('utf-8')
+                            else:
+                                raise Exception(f"Status {response.status_code}")
+                        except Exception as e:
+                            log_container.warning(f"Download fail for {sku_label}: {e}")
+                            img_preview.error("❌ Image Error")
+                            continue
+
+                        # 3. HINTS
+                        hints = "Product analysis."
+                        try:
+                            match_row = df_to_proc[df_to_proc[img_col] == u_key]
+                            if not match_row.empty:
+                                sample_row = match_row.iloc[0]
+                                hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v).lower() != "nan"])
+                                hints = smart_truncate(hints, 300)
+                        except: pass
+
+                        # 4. AI ANALYSIS
+                        ai_status_badge.warning(f"🤖 AI Working on {sku_label}...")
+                        ai_data = None
+                        max_retries = 3
+                        
+                        for attempt in range(max_retries):
+                            try:
+                                if "Dual-AI" in arch_mode:
+                                    ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
+                                else:
+                                    ai_data = {}
+                                    err = "Select Dual-AI"
+
+                                if err:
+                                    if "429" in str(err) or "quota" in str(err).lower():
+                                        log_container.warning(f"Rate Limit 429. Sleeping 60s... (Retry {attempt+1})")
+                                        time.sleep(60)
+                                        continue 
+                                    else:
+                                        raise Exception(err)
+                                
+                                image_knowledge_base[u_key] = ai_data
+                                
+                                # LOG SUCCESS WITH SKU
+                                log_container.success(f"✅ {sku_label} Processed")
+                                break 
+
+                            except Exception as e:
+                                if attempt == max_retries - 1:
+                                    log_container.error(f"Failed {sku_label}: {str(e)}")
+                                time.sleep(2)
+                        
+                        time.sleep(0.5)
+
+                    # === CLEANUP UI ===
+                    ai_status_badge.success("✅ Batch Analysis Complete")
+                    img_preview.empty() # Remove the last image
+                    
+                    # === PHASE 2: DATA MAPPING ===
+                    status_text.markdown("**🚀 Finalizing: Mapping Data to Excel...**")
+                    final_rows = []
+                    
+                    for idx, row in df_to_proc.iterrows():
+                        u_key = str(row.get(img_col, "")).strip()
+                        ai_data = image_knowledge_base.get(u_key, {})
+                        
+                        new_row = {}
+                        for col in config['headers']:
+                            rule = mapping.get(col, {'source': 'BLANK'})
+                            val = ""
+                            
+                            if rule['source'] == 'INPUT': val = row.get(col, "")
+                            elif rule['source'] == 'FIXED': val = rule['value']
+                            elif rule['source'] == 'AI' and ai_data:
+                                if col in ai_data: val = ai_data[col]
+                                else: 
+                                    clean_col = col.lower().replace(" ", "").replace("_", "")
+                                    for k,v in ai_data.items():
+                                        if k.lower().replace(" ", "") in clean_col:
+                                            val = v; break
+                                
+                                m_list = []
+                                for mc, opts in config['master_data'].items():
+                                    if mc.lower() in col.lower(): m_list = opts; break
+                                if m_list and val: val = enforce_master_data_fallback(val, m_list)
+                            
+                            # SANITIZATION
+                            if isinstance(val, list) or isinstance(val, tuple): val = ", ".join([str(x) for x in val])
+                            elif isinstance(val, dict): val = json.dumps(val)
+                            val = str(val).strip()
+                            if rule.get('max_len'): val = smart_truncate(val, int(float(rule['max_len'])))
+                            
+                            new_row[col] = val
+                        
+                        final_rows.append(new_row)
+                    
+                    st.session_state.gen_results = final_rows
+                    st.toast("Processing Complete!", icon="🎉")
+
+                except Exception as critical_e:
+                    st.error(f"💀 CRITICAL ERROR: {str(critical_e)}")
+                    log_container.exception(critical_e)
+
+            # --- RESULT DISPLAY ---
+            if "gen_results" in st.session_state and len(st.session_state.gen_results) > 0:
+                st.divider()
+                
+                res_tab1, res_tab2 = st.tabs(["📊 Success Data", "⚠️ Needs Attention"])
+                
+                final_df = pd.DataFrame(st.session_state.gen_results)
+                
+                with res_tab1:
+                    st.success(f"Successfully generated {len(final_df)} rows.")
+                    st.dataframe(final_df.astype(str), use_container_width=True)
+                    
+                    output_gen = BytesIO()
+                    with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
+                        final_df.to_excel(writer, index=False)
+                    
+                    st.download_button(
+                        "⬇️ Download Final Excel", 
+                        output_gen.getvalue(), 
+                        file_name=f"{selected_mp}_Generated_{len(final_df)}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+
+                with res_tab2:
+                    st.info("Rows with missing images or data will be flagged here in future updates.")
     # --- TAB 4: TOOLS ---
     with tabs[3]:
         st.header("🛠️ Media Tools")
@@ -640,8 +793,6 @@ else:
                 u_to_del = st.selectbox("Select User", [u['Username'] for u in get_all_users() if str(u['Username']) != "admin"])
                 if st.button("Delete"):
                     if delete_user(u_to_del): st.success("Removed"); time.sleep(1); st.rerun()
-
-
 
 
 
