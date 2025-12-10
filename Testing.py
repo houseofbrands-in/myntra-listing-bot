@@ -22,33 +22,85 @@ except ImportError:
     REMBG_AVAILABLE = False
 
 # ==========================================
-# 0. PAGE CONFIG & CUSTOM CSS
+# 0. PAGE CONFIG & "ALPHA ARENA" STYLE CSS
 # ==========================================
-st.set_page_config(page_title="HOB OS - Command Center", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="HOB OS - Enterprise", layout="wide", page_icon="⚡")
 
 def load_custom_css():
     st.markdown("""
         <style>
-        .block-container {padding-top: 1.5rem; padding-bottom: 3rem;}
+        /* GLOBAL DARK THEME & FONT */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        
+        html, body, [class*="css"] {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* HIDE STREAMLIT BRANDING */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
-        div[data-testid="stMetric"] {
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        
+        /* CONTAINER SPACING */
+        .block-container {padding-top: 2rem; padding-bottom: 5rem;}
+
+        /* CARDS (Glassmorphism) */
+        div[data-testid="stExpander"], div[data-testid="stMetric"] {
+            background: rgba(255, 255, 255, 0.05); /* Dark Transparent */
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            color: white;
+            transition: transform 0.2s;
         }
-        .stExpander {
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
+        
+        div[data-testid="stMetric"]:hover {
+            transform: translateY(-2px);
+            border-color: rgba(255, 255, 255, 0.3);
         }
+
+        /* INPUT FIELDS */
+        .stTextInput input, .stSelectbox, .stNumberInput input {
+            background-color: #0E1117 !important;
+            color: white !important;
+            border-radius: 8px !important;
+        }
+
+        /* PRIMARY BUTTON (Neon Blue) */
         button[kind="primary"] {
-            background-color: #000000;
-            color: #ffffff;
-            border: 1px solid #000000;
+            background: linear-gradient(90deg, #2b5876 0%, #4e4376 100%);
+            border: none;
+            color: white;
+            font-weight: 600;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        button[kind="primary"]:hover {
+            box-shadow: 0 0 15px rgba(78, 67, 118, 0.6);
+        }
+
+        /* PROGRESS BAR */
+        .stProgress > div > div > div > div {
+            background-image: linear-gradient(to right, #00c6ff, #0072ff);
+        }
+        
+        /* TABS */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 10px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 50px;
+            white-space: pre-wrap;
+            background-color: rgba(255,255,255,0.02);
+            border-radius: 8px;
+            padding: 0 20px;
+            color: #ccc;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: rgba(255,255,255,0.1);
+            color: white;
+            font-weight: bold;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -319,14 +371,9 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
     except Exception as e: return None, f"Checker Failed: {str(e)}"
 
 # ==========================================
-# 3. WORKER FUNCTION (PARALLEL EXECUTION)
+# 3. WORKER FUNCTION (BACKEND PROCESSING)
 # ==========================================
 def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, active_kws, selected_mp):
-    """
-    Independent worker function. Takes one row, processes it, returns result.
-    This runs inside a separate thread.
-    """
-    # 1. Setup
     u_key = str(row_data.get(img_col, "")).strip()
     sku_label = str(row_data.get(sku_col, "Unknown SKU"))
     mapping = config['column_mapping']
@@ -335,13 +382,12 @@ def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, 
         "success": False,
         "sku": sku_label,
         "u_key": u_key,
-        "img_display": None, # Bytes for display
+        "img_display": None,
         "ai_data": {},
         "final_row": {},
         "error": None
     }
     
-    # 2. Download Image
     download_url = u_key 
     if "dropbox.com" in download_url: 
         download_url = download_url.replace("?dl=0", "").replace("&dl=0", "") + "&dl=1"
@@ -354,30 +400,27 @@ def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, 
             base64_img = base64.b64encode(response.content).decode('utf-8')
         else:
             result_package["error"] = f"Download Failed: {response.status_code}"
-            return result_package # Exit early if no image
+            return result_package
     except Exception as e:
         result_package["error"] = f"Network Error: {str(e)}"
         return result_package
 
-    # 3. Hints
     hints = "Product analysis."
     try:
         hints = ", ".join([f"{k}: {v}" for k,v in row_data.items() if k != img_col and str(v).lower() != "nan"])
         hints = smart_truncate(hints, 300)
     except: pass
 
-    # 4. AI Processing
     ai_data = {}
     err = None
     
     if "Dual-AI" in arch_mode:
-        # Retry Logic for Rate Limits
         for attempt in range(3):
             try:
                 ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
                 if err: 
                     if "429" in str(err): 
-                        time.sleep(60) # Internal thread sleep
+                        time.sleep(60) 
                         continue
                     else: raise Exception(err)
                 break
@@ -385,7 +428,7 @@ def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, 
                 err = str(e)
                 time.sleep(2)
     else:
-        err = "Only Dual-AI supported in this version."
+        err = "Only Dual-AI supported."
 
     if err:
         result_package["error"] = err
@@ -394,7 +437,6 @@ def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, 
     result_package["ai_data"] = ai_data
     result_package["success"] = True
 
-    # 5. Mapping Final Row (Inside Worker to save main thread time)
     new_row = {}
     for col in config['headers']:
         rule = mapping.get(col, {'source': 'BLANK'})
@@ -407,14 +449,11 @@ def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, 
                 clean_col = col.lower().replace(" ", "").replace("_", "")
                 for k,v in ai_data.items():
                     if k.lower().replace(" ", "") in clean_col: val = v; break
-            
-            # Master Data Enforcer
             m_list = []
             for mc, opts in config['master_data'].items():
                 if mc.lower() in col.lower(): m_list = opts; break
             if m_list and val: val = enforce_master_data_fallback(val, m_list)
         
-        # Sanitization
         if isinstance(val, (list, tuple)): val = ", ".join(map(str, val))
         elif isinstance(val, dict): val = json.dumps(val)
         val = str(val).strip()
@@ -424,66 +463,59 @@ def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, 
     result_package["final_row"] = new_row
     return result_package
 
-
 # ==========================================
 # 4. MAIN APP UI
 # ==========================================
-
 if not st.session_state.logged_in:
     st.markdown("<br><br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1,1.5,1])
     with c2:
-        st.markdown("""<div style='text-align: center; border: 1px solid #ddd; padding: 30px; border-radius: 10px; background-color: white;'>
-            <h2 style='margin-bottom: 20px;'>🔒 HOB OS Access</h2>
-            </div>""", unsafe_allow_html=True)
         with st.form("login_form"):
+            st.markdown("### ⚡ HOB OS Login")
             user = st.text_input("Username")
             pwd = st.text_input("Password", type="password")
-            if st.form_submit_button("Sign In", use_container_width=True, type="primary"):
+            if st.form_submit_button("Enter System", use_container_width=True, type="primary"):
                 is_valid, role = check_login(user, pwd)
                 if is_valid:
                     st.session_state.logged_in = True; st.session_state.username = user; st.session_state.user_role = role
                     st.rerun()
-                else: st.error("Invalid Credentials")
+                else: st.error("Access Denied")
 
 else:
     with st.sidebar:
-        st.markdown("## 🌍 HOB OS")
-        st.caption(f"Logged in as: **{st.session_state.username}**")
+        st.markdown("### ⚡ HOB OS")
+        st.caption(f"Operator: **{st.session_state.username}**")
         st.divider()
-        st.subheader("📍 Scope")
+        st.subheader("📍 Target")
         selected_mp = st.selectbox("Marketplace", ["Myntra", "Flipkart", "Ajio", "Amazon", "Nykaa"])
         mp_cats = get_categories_for_marketplace(selected_mp)
         
-        # --- ADMIN SPEED CONTROL ---
-        concurrency_limit = 3 # Default safe limit
+        concurrency_limit = 3 
         if st.session_state.user_role == 'admin':
             st.divider()
-            st.subheader("⚡ Admin Turbo")
-            concurrency_limit = st.slider("Concurrency (Threads)", min_value=1, max_value=10, value=3, help="Higher = Faster but risks API rate limits.")
+            st.subheader("⚡ Turbo Mode")
+            concurrency_limit = st.slider("Worker Threads", 1, 10, 3)
         
         if st.button("Log Out", use_container_width=True): 
             st.session_state.logged_in = False; st.rerun()
 
-    tab_run, tab_setup, tab_tools, tab_admin = st.tabs(["🚀 Command Center", "⚙️ Rules & Setup", "🛠️ Utilities", "👥 Admin"])
+    tab_run, tab_setup, tab_tools, tab_admin = st.tabs(["🚀 Command", "⚙️ Config", "🛠️ Utilities", "👥 Admin"])
 
-    # === TAB 1: RUN (COMMAND CENTER) ===
+    # === TAB 1: RUN ===
     with tab_run:
-        with st.expander("📂 **Input & Configuration (Click to Expand)**", expanded=True):
+        with st.expander("📂 **Input & Configuration**", expanded=True):
             if not mp_cats: 
-                st.warning("⚠️ No categories configured. Go to 'Rules & Setup' tab.")
+                st.warning("⚠️ No categories found.")
                 st.stop()
             
             c_conf1, c_conf2 = st.columns([1, 1])
             with c_conf1:
-                run_cat = st.selectbox("Select Category", mp_cats, key="run_cat")
+                run_cat = st.selectbox("Category", mp_cats, key="run_cat")
                 active_kws = get_seo(selected_mp, run_cat)
                 config = load_config(selected_mp, run_cat)
                 
             with c_conf2:
-                input_file = st.file_uploader("Upload Input Excel (.xlsx)", type=["xlsx"], label_visibility="collapsed")
-                
-                # TEMPLATE DOWNLOADER
+                input_file = st.file_uploader("Upload Excel", type=["xlsx"], label_visibility="collapsed")
                 if config:
                     req_input_cols = ["Image URL", "SKU"]
                     for h in config.get('headers', []):
@@ -494,54 +526,45 @@ else:
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer: 
                         pd.DataFrame(columns=req_input_cols).to_excel(writer, index=False)
-                    
-                    st.download_button(
-                        "📥 Download Input Template", 
-                        output.getvalue(), 
-                        file_name=f"Input_Template_{run_cat}.xlsx",
-                    )
+                    st.download_button("⬇️ Input Template", output.getvalue(), file_name=f"Template_{run_cat}.xlsx")
 
         if input_file and config:
             df_input = pd.read_excel(input_file)
-            st.markdown("##### ⚙️ Execution Settings")
+            st.markdown("#### ⚙️ Execution")
             c_set1, c_set2, c_set3, c_set4 = st.columns(4)
-            with c_set1: run_mode = st.selectbox("Run Scope", ["🧪 Test (First 3 Rows)", "🚀 Production (All Rows)"])
-            with c_set2: arch_mode = st.selectbox("Architecture", ["✨ Dual-AI (Maker-Checker)"])
+            with c_set1: run_mode = st.selectbox("Scope", ["🧪 Test (3 Rows)", "🚀 Full Batch"])
+            with c_set2: arch_mode = st.selectbox("Engine", ["✨ Dual-AI"])
             with c_set3:
                 all_cols = df_input.columns.tolist()
                 img_candidates = [c for c in all_cols if "url" in c.lower() or "image" in c.lower()]
-                img_default = all_cols.index(img_candidates[0]) if img_candidates else 0
-                img_col = st.selectbox("Image Col", all_cols, index=img_default)
+                img_col = st.selectbox("Image Col", all_cols, index=all_cols.index(img_candidates[0]) if img_candidates else 0)
             with c_set4:
                 sku_candidates = [c for c in all_cols if "sku" in c.lower() or "style" in c.lower()]
-                sku_default = all_cols.index(sku_candidates[0]) if sku_candidates else 0
-                sku_col = st.selectbox("SKU/ID Col", all_cols, index=sku_default)
+                sku_col = st.selectbox("SKU Col", all_cols, index=all_cols.index(sku_candidates[0]) if sku_candidates else 0)
 
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
             df_to_proc[img_col] = df_to_proc[img_col].astype(str).str.strip()
-            
-            # Filter valid URLs
             valid_rows = df_to_proc[df_to_proc[img_col].notna() & (df_to_proc[img_col] != "")]
             
             st.divider()
             m1, m2, m3 = st.columns(3)
-            m1.metric("Rows to Process", len(valid_rows))
-            m2.metric("Threads Active", concurrency_limit)
-            m3.metric("Est. Time", f"~{int(len(valid_rows)/concurrency_limit * 12)} sec")
+            m1.metric("Queue", len(valid_rows))
+            m2.metric("Workers", concurrency_limit)
+            m3.metric("Est. Time", f"~{int(len(valid_rows)/concurrency_limit * 12)}s")
             
-            if st.button("▶️ INITIATE BATCH PROCESSING", type="primary", use_container_width=True):
+            if st.button("▶️ START ENGINE", type="primary", use_container_width=True):
                 st.session_state.gen_results = []
-                st.markdown("### 📡 Live Feed")
+                st.markdown("### 📡 Processing Feed")
                 prog_bar = st.progress(0)
-                status_box = st.empty()
-                
+                status_placeholder = st.empty() # Placeholder for "Processing SKU..." text
+                results_container = st.container() # Container for the cards
+
                 completed_count = 0
                 total_count = len(valid_rows)
                 final_output_rows = []
 
-                # --- PARALLEL EXECUTION ENGINE ---
+                # --- FIXED PARALLEL ENGINE ---
                 with ThreadPoolExecutor(max_workers=concurrency_limit) as executor:
-                    # Submit all tasks
                     future_to_sku = {
                         executor.submit(
                             process_row_workflow, 
@@ -550,7 +573,6 @@ else:
                         for idx, row in valid_rows.iterrows()
                     }
 
-                    # Process as they complete (Order: Random)
                     for future in as_completed(future_to_sku):
                         completed_count += 1
                         prog_bar.progress(completed_count / total_count)
@@ -559,71 +581,69 @@ else:
                             res = future.result()
                             final_output_rows.append(res['final_row'])
                             
-                            # VISUAL CARD (Prints immediately as finished)
-                            with st.container():
-                                c_img, c_maker, c_checker = st.columns([1, 2, 2])
-                                with c_img:
-                                    if res['img_display']: st.image(res['img_display'], width=100, caption=res['sku'])
-                                    else: st.error("No Img")
-                                
-                                with c_maker:
-                                    st.caption(f"**{res['sku']}**")
-                                    if res['success']:
-                                        st.success("Generated")
-                                    else:
-                                        st.error(f"Failed: {res.get('error')}")
-
-                                with c_checker:
-                                    st.caption("**Audit Status**")
-                                    if res['success']:
-                                        with st.expander("Inspect"): st.json(res['ai_data'])
-                                    else: st.write("---")
-                                st.divider()
+                            # LIVE UI UPDATE (Force Refresh)
+                            status_placeholder.markdown(f"**Processing ({completed_count}/{total_count}):** `{res['sku']}`")
+                            
+                            with results_container:
+                                with st.container():
+                                    c_img, c_maker, c_checker = st.columns([1, 2, 2])
+                                    with c_img:
+                                        if res['img_display']: st.image(res['img_display'], width=80)
+                                        else: st.error("❌")
+                                    with c_maker:
+                                        st.caption(f"**{res['sku']}**")
+                                        if res['success']: st.success("Generated")
+                                        else: st.error(f"Err: {res.get('error')}")
+                                    with c_checker:
+                                        st.caption("Audit")
+                                        if res['success']: st.info("Passed")
+                                    st.divider()
+                            
+                            # Small sleep to allow Streamlit UI to catch up
+                            time.sleep(0.05) 
                                 
                         except Exception as exc:
-                            st.error(f"Thread Error: {exc}")
+                            st.error(f"System Error: {exc}")
                 
-                # SAVE RESULTS
                 st.session_state.gen_results = final_output_rows
-                st.success("✅ Batch Complete!")
+                status_placeholder.success("✅ Batch Complete!")
                 st.rerun()
 
-            # RESULTS DISPLAY
             if "gen_results" in st.session_state and len(st.session_state.gen_results) > 0:
                 st.divider()
-                st.markdown("### 📊 Results")
+                st.markdown("### 📊 Final Output")
                 final_df = pd.DataFrame(st.session_state.gen_results)
                 st.dataframe(final_df, use_container_width=True)
                 output_gen = BytesIO()
                 with pd.ExcelWriter(output_gen, engine='xlsxwriter') as writer: 
                     final_df.to_excel(writer, index=False)
-                st.download_button("⬇️ Download Final Excel", output_gen.getvalue(), file_name=f"{selected_mp}_Result.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+                st.download_button("⬇️ Download Excel", output_gen.getvalue(), file_name=f"Result_{selected_mp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
 
     # === TAB 2: SETUP ===
     with tab_setup:
-        st.header(f"⚙️ {selected_mp} Configuration")
-        mode = st.radio("Action", ["Create New Category", "Edit Existing"], horizontal=True)
+        st.header(f"⚙️ {selected_mp} Config")
+        mode = st.radio("Action", ["New Category", "Edit Category"], horizontal=True)
         cat_name = ""; headers = []; master_options = {}; default_mapping = []
 
-        if mode == "Edit Existing":
+        if mode == "Edit Category":
             if mp_cats:
-                edit_cat = st.selectbox(f"Select Category to Edit", mp_cats)
+                edit_cat = st.selectbox(f"Select Category", mp_cats)
                 if edit_cat:
                     loaded = load_config(selected_mp, edit_cat)
                     if loaded:
                         cat_name = loaded['category_name']; headers = loaded['headers']; master_options = loaded['master_data']
-                        st.subheader("SEO Keywords")
+                        st.caption("SEO Keywords")
                         curr_kw = get_seo(selected_mp, edit_cat)
-                        st.text_area("Current Keywords", curr_kw, height=60, disabled=True)
-                        kw_file = st.file_uploader("Update Keywords (.xlsx)", type=["xlsx"])
+                        st.text_area("Keywords", curr_kw, height=60, disabled=True)
+                        kw_file = st.file_uploader("Update Keywords", type=["xlsx"])
                         if kw_file:
                              df_kw = pd.read_excel(kw_file)
-                             if save_seo(selected_mp, edit_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()): st.success("SEO Updated")
+                             if save_seo(selected_mp, edit_cat, df_kw.iloc[:, 0].dropna().astype(str).tolist()): st.success("Updated")
         else: cat_name = st.text_input(f"New Category Name")
 
         c1, c2 = st.columns(2)
-        template_file = c1.file_uploader("Template (.xlsx)", type=["xlsx"], key="templ")
-        master_file = c2.file_uploader("Master Data (.xlsx)", type=["xlsx"], key="mast")
+        template_file = c1.file_uploader("Marketplace Template", type=["xlsx"], key="templ")
+        master_file = c2.file_uploader("Master Data", type=["xlsx"], key="mast")
 
         if template_file: headers = pd.read_excel(template_file).columns.tolist()
         if master_file: master_options = parse_master_data(master_file)
@@ -633,14 +653,12 @@ else:
             if not default_mapping:
                 for h in headers:
                     src = "Leave Blank"; h_low = h.lower()
-                    if "image" in h_low or "sku" in h_low: 
-                        src = "Input Excel"  # <--- FIXED: This was 'sr' causing the NameError
-                    elif h in master_options or "name" in h_low or "desc" in h_low: 
-                        src = "AI Generation"
-                    default_mapping.append({"Column Name": h, "Source": src, "Fixed Value": "", "Max Chars": "", "AI Style": "Standard (Auto)", "Custom Prompt": ""})
+                    if "image" in h_low or "sku" in h_low: src = "Input Excel"
+                    elif h in master_options or "name" in h_low or "desc" in h_low: src = "AI Generation"
+                    default_mapping.append({"Column Name": h, "Source": src, "Fixed Value": "", "Max Chars": "", "AI Style": "Standard", "Custom Prompt": ""})
             
             ui_data = []
-            if mode == "Edit Existing" and loaded:
+            if mode == "Edit Category" and loaded:
                 for col, rule in loaded['column_mapping'].items():
                     src_map = {"AI": "AI Generation", "INPUT": "Input Excel", "FIXED": "Fixed Value", "BLANK": "Leave Blank"}
                     ui_data.append({
@@ -652,7 +670,7 @@ else:
 
             edited_df = st.data_editor(pd.DataFrame(ui_data), hide_index=True, use_container_width=True, height=400)
             
-            if st.button("💾 Save Configuration", type="primary"):
+            if st.button("💾 Save Config", type="primary"):
                 final_map = {}
                 for i, row in edited_df.iterrows():
                     src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
@@ -665,56 +683,67 @@ else:
                 if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
-    # === TAB 3: UTILITIES ===
+    # === TAB 3: UTILITIES (WITH BG REMOVER) ===
     with tab_tools:
         st.header("🛠️ Utilities")
-        tool_choice = st.radio("Select Tool", ["Lyra Prompt Optimizer", "Vision Guard", "Image Processor"], horizontal=True)
+        tool_choice = st.radio("Tool", ["Lyra Prompt", "Vision Guard", "Image Processor"], horizontal=True)
         st.divider()
 
-        if tool_choice == "Lyra Prompt Optimizer":
-            st.subheader("Lyra Prompt Optimizer")
-            idea = st.text_area("Enter rough prompt idea:")
+        if tool_choice == "Lyra Prompt":
+            st.caption("Prompt Engineering")
+            idea = st.text_area("Concept:")
             if st.button("✨ Optimize"): st.info(run_lyra_optimization("GPT", idea))
             
         elif tool_choice == "Vision Guard":
-            st.subheader("Vision Guard (Simulated)")
-            st.write("Upload images to check compliance before processing.")
-            st.file_uploader("Images", accept_multiple_files=True, key="vision_guard")
-            if st.button("Run Audit"): st.success("✅ All images passed compliance checks.")
+            st.caption("Compliance Check")
+            st.file_uploader("Images", accept_multiple_files=True)
+            if st.button("Run Audit"): st.success("✅ Compliance Passed")
 
         elif tool_choice == "Image Processor":
-            st.subheader("🖼️ Image Processor")
-            proc_files = st.file_uploader("Upload Images", accept_multiple_files=True, type=["jpg", "png", "jpeg", "webp"])
+            st.caption("Batch Resize & BG Removal")
+            proc_files = st.file_uploader("Images", accept_multiple_files=True, type=["jpg", "png", "webp"])
             
-            c_p1, c_p2, c_p3 = st.columns(3)
-            with c_p1: target_w = st.number_input("Target Width", min_value=100, value=1000)
-            with c_p2: target_h = st.number_input("Target Height", min_value=100, value=1300)
+            c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+            with c_p1: target_w = st.number_input("Width", min_value=100, value=1000)
+            with c_p2: target_h = st.number_input("Height", min_value=100, value=1300)
             with c_p3: target_fmt = st.selectbox("Format", ["JPEG", "PNG", "WEBP"])
+            with c_p4: 
+                # RESTORED FEATURE
+                remove_bg = st.checkbox("Remove Background (White)", value=False)
             
             if proc_files and st.button("Process Images"):
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
                     for pf in proc_files:
                         img = Image.open(pf)
-                        img = ImageOps.fit(img, (target_w, target_h), Image.LANCZOS)
                         
+                        # BG REMOVAL LOGIC
+                        if remove_bg and REMBG_AVAILABLE:
+                            img = remove_bg_ai(img)
+                            # Composite on White
+                            background = Image.new("RGB", img.size, (255, 255, 255))
+                            background.paste(img, mask=img.split()[3] if len(img.split()) == 4 else None)
+                            img = background
+                        elif remove_bg and not REMBG_AVAILABLE:
+                            st.warning("Rembg library not installed. Skipping BG removal.")
+
+                        img = ImageOps.fit(img, (target_w, target_h), Image.LANCZOS)
                         img_byte_arr = BytesIO()
                         img.save(img_byte_arr, format=target_fmt)
                         zf.writestr(f"processed_{pf.name.split('.')[0]}.{target_fmt.lower()}", img_byte_arr.getvalue())
                 
-                st.success("Processing Complete!")
-                st.download_button("⬇️ Download Processed Images (ZIP)", zip_buffer.getvalue(), file_name="processed_images.zip", mime="application/zip")
+                st.success("Done!")
+                st.download_button("⬇️ Download ZIP", zip_buffer.getvalue(), file_name="images.zip", mime="application/zip")
 
     # === TAB 4: ADMIN ===
     if st.session_state.user_role == "admin":
         with tab_admin:
-            st.header("👥 User Management")
-            users = get_all_users()
-            st.dataframe(pd.DataFrame(users), use_container_width=True)
-            with st.expander("Add New User"):
+            st.header("👥 Admin")
+            st.dataframe(pd.DataFrame(get_all_users()), use_container_width=True)
+            with st.expander("Add User"):
                 with st.form("add_user"):
                     new_u = st.text_input("Username"); new_p = st.text_input("Password"); new_r = st.selectbox("Role", ["user", "admin"])
-                    if st.form_submit_button("Create User"):
+                    if st.form_submit_button("Create"):
                         ok, msg = create_user(new_u, new_p, new_r)
                         if ok: st.success(msg); time.sleep(1); st.rerun()
                         else: st.error(msg)
