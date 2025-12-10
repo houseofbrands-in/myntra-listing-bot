@@ -12,6 +12,7 @@ import zipfile
 from PIL import Image, ImageOps
 import google.generativeai as genai
 import difflib 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- DEPENDENCY CHECK ---
 try:
@@ -256,7 +257,7 @@ def run_lyra_optimization(model_choice, raw_instruction):
             return response.text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- DUAL AI LOGIC ---
+# --- DUAL AI LOGIC (Unchanged) ---
 def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
     target_columns = []
     strict_constraints = {} 
@@ -318,7 +319,114 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
     except Exception as e: return None, f"Checker Failed: {str(e)}"
 
 # ==========================================
-# 3. MAIN APP UI
+# 3. WORKER FUNCTION (PARALLEL EXECUTION)
+# ==========================================
+def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, active_kws, selected_mp):
+    """
+    Independent worker function. Takes one row, processes it, returns result.
+    This runs inside a separate thread.
+    """
+    # 1. Setup
+    u_key = str(row_data.get(img_col, "")).strip()
+    sku_label = str(row_data.get(sku_col, "Unknown SKU"))
+    mapping = config['column_mapping']
+    
+    result_package = {
+        "success": False,
+        "sku": sku_label,
+        "u_key": u_key,
+        "img_display": None, # Bytes for display
+        "ai_data": {},
+        "final_row": {},
+        "error": None
+    }
+    
+    # 2. Download Image
+    download_url = u_key 
+    if "dropbox.com" in download_url: 
+        download_url = download_url.replace("?dl=0", "").replace("&dl=0", "") + "&dl=1"
+    
+    base64_img = None
+    try:
+        response = requests.get(download_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        if response.status_code == 200:
+            result_package["img_display"] = response.content
+            base64_img = base64.b64encode(response.content).decode('utf-8')
+        else:
+            result_package["error"] = f"Download Failed: {response.status_code}"
+            return result_package # Exit early if no image
+    except Exception as e:
+        result_package["error"] = f"Network Error: {str(e)}"
+        return result_package
+
+    # 3. Hints
+    hints = "Product analysis."
+    try:
+        hints = ", ".join([f"{k}: {v}" for k,v in row_data.items() if k != img_col and str(v).lower() != "nan"])
+        hints = smart_truncate(hints, 300)
+    except: pass
+
+    # 4. AI Processing
+    ai_data = {}
+    err = None
+    
+    if "Dual-AI" in arch_mode:
+        # Retry Logic for Rate Limits
+        for attempt in range(3):
+            try:
+                ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
+                if err: 
+                    if "429" in str(err): 
+                        time.sleep(60) # Internal thread sleep
+                        continue
+                    else: raise Exception(err)
+                break
+            except Exception as e:
+                err = str(e)
+                time.sleep(2)
+    else:
+        err = "Only Dual-AI supported in this version."
+
+    if err:
+        result_package["error"] = err
+        return result_package
+
+    result_package["ai_data"] = ai_data
+    result_package["success"] = True
+
+    # 5. Mapping Final Row (Inside Worker to save main thread time)
+    new_row = {}
+    for col in config['headers']:
+        rule = mapping.get(col, {'source': 'BLANK'})
+        val = ""
+        if rule['source'] == 'INPUT': val = row_data.get(col, "")
+        elif rule['source'] == 'FIXED': val = rule['value']
+        elif rule['source'] == 'AI' and ai_data:
+            if col in ai_data: val = ai_data[col]
+            else: 
+                clean_col = col.lower().replace(" ", "").replace("_", "")
+                for k,v in ai_data.items():
+                    if k.lower().replace(" ", "") in clean_col: val = v; break
+            
+            # Master Data Enforcer
+            m_list = []
+            for mc, opts in config['master_data'].items():
+                if mc.lower() in col.lower(): m_list = opts; break
+            if m_list and val: val = enforce_master_data_fallback(val, m_list)
+        
+        # Sanitization
+        if isinstance(val, (list, tuple)): val = ", ".join(map(str, val))
+        elif isinstance(val, dict): val = json.dumps(val)
+        val = str(val).strip()
+        if rule.get('max_len'): val = smart_truncate(val, int(float(rule['max_len'])))
+        new_row[col] = val
+    
+    result_package["final_row"] = new_row
+    return result_package
+
+
+# ==========================================
+# 4. MAIN APP UI
 # ==========================================
 
 if not st.session_state.logged_in:
@@ -346,6 +454,14 @@ else:
         st.subheader("📍 Scope")
         selected_mp = st.selectbox("Marketplace", ["Myntra", "Flipkart", "Ajio", "Amazon", "Nykaa"])
         mp_cats = get_categories_for_marketplace(selected_mp)
+        
+        # --- ADMIN SPEED CONTROL ---
+        concurrency_limit = 3 # Default safe limit
+        if st.session_state.user_role == 'admin':
+            st.divider()
+            st.subheader("⚡ Admin Turbo")
+            concurrency_limit = st.slider("Concurrency (Threads)", min_value=1, max_value=10, value=3, help="Higher = Faster but risks API rate limits.")
+        
         if st.button("Log Out", use_container_width=True): 
             st.session_state.logged_in = False; st.rerun()
 
@@ -367,27 +483,22 @@ else:
             with c_conf2:
                 input_file = st.file_uploader("Upload Input Excel (.xlsx)", type=["xlsx"], label_visibility="collapsed")
                 
-                # FIX 1: DOWNLOAD INPUT TEMPLATE (STRICT ORDER)
+                # TEMPLATE DOWNLOADER
                 if config:
                     req_input_cols = ["Image URL", "SKU"]
-                    
-                    # Iterate through the ORDERED headers list from config
                     for h in config.get('headers', []):
                         rule = config.get('column_mapping', {}).get(h, {})
                         if rule.get('source') == 'INPUT':
-                            # Avoid duplicates only if they match the first two
-                            if h not in req_input_cols:
-                                req_input_cols.append(h)
+                            if h not in req_input_cols: req_input_cols.append(h)
                     
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer: 
                         pd.DataFrame(columns=req_input_cols).to_excel(writer, index=False)
                     
                     st.download_button(
-                        "📥 Download Input Template (For Upload)", 
+                        "📥 Download Input Template", 
                         output.getvalue(), 
                         file_name=f"Input_Template_{run_cat}.xlsx",
-                        help="Contains Image URL, SKU, and columns marked as 'Input Excel'."
                     )
 
         if input_file and config:
@@ -395,7 +506,7 @@ else:
             st.markdown("##### ⚙️ Execution Settings")
             c_set1, c_set2, c_set3, c_set4 = st.columns(4)
             with c_set1: run_mode = st.selectbox("Run Scope", ["🧪 Test (First 3 Rows)", "🚀 Production (All Rows)"])
-            with c_set2: arch_mode = st.selectbox("Architecture", ["✨ Dual-AI (Maker-Checker)", "⚡ Gemini Only", "🧠 GPT-4o Only"])
+            with c_set2: arch_mode = st.selectbox("Architecture", ["✨ Dual-AI (Maker-Checker)"])
             with c_set3:
                 all_cols = df_input.columns.tolist()
                 img_candidates = [c for c in all_cols if "url" in c.lower() or "image" in c.lower()]
@@ -408,114 +519,76 @@ else:
 
             df_to_proc = df_input.head(3) if "Test" in run_mode else df_input
             df_to_proc[img_col] = df_to_proc[img_col].astype(str).str.strip()
-            unique_urls = [u for u in df_to_proc[img_col].unique() if u.lower() != "nan" and u != ""]
+            
+            # Filter valid URLs
+            valid_rows = df_to_proc[df_to_proc[img_col].notna() & (df_to_proc[img_col] != "")]
             
             st.divider()
             m1, m2, m3 = st.columns(3)
-            m1.metric("Rows to Process", len(df_to_proc))
-            m2.metric("Unique Images", len(unique_urls))
-            m3.metric("Est. Cost", f"${(len(unique_urls) * (0.032 if 'Dual-AI' in arch_mode else 0.03)):.3f}")
+            m1.metric("Rows to Process", len(valid_rows))
+            m2.metric("Threads Active", concurrency_limit)
+            m3.metric("Est. Time", f"~{int(len(valid_rows)/concurrency_limit * 12)} sec")
             
             if st.button("▶️ INITIATE BATCH PROCESSING", type="primary", use_container_width=True):
                 st.session_state.gen_results = []
                 st.markdown("### 📡 Live Feed")
                 prog_bar = st.progress(0)
+                status_box = st.empty()
                 
-                with st.status("🚀 Processing Batch...", expanded=True) as status_box:
-                    image_knowledge_base = {}
-                    mapping = config['column_mapping']
-                    for i, u_key in enumerate(unique_urls):
-                        img_num = i + 1; total_imgs = len(unique_urls)
-                        sku_label = f"Img-{img_num}"
-                        try:
-                            match_row = df_to_proc[df_to_proc[img_col] == u_key]
-                            if not match_row.empty: sku_label = str(match_row.iloc[0][sku_col])
-                        except: pass
-                        
-                        prog_bar.progress(img_num / total_imgs)
-                        status_box.update(label=f"Analyzing {img_num}/{total_imgs}: **{sku_label}**")
-                        
-                        download_url = u_key 
-                        if "dropbox.com" in download_url: download_url = download_url.replace("?dl=0", "").replace("&dl=0", "") + "&dl=1"
-                        base64_img = None; img_display_data = None
-                        try:
-                            response = requests.get(download_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-                            if response.status_code == 200:
-                                img_display_data = response.content
-                                base64_img = base64.b64encode(response.content).decode('utf-8')
-                        except: pass
+                completed_count = 0
+                total_count = len(valid_rows)
+                final_output_rows = []
 
-                        hints = "Product analysis."
-                        try:
-                            match_row = df_to_proc[df_to_proc[img_col] == u_key]
-                            if not match_row.empty:
-                                sample_row = match_row.iloc[0]
-                                hints = ", ".join([f"{k}: {v}" for k,v in sample_row.items() if k != img_col and str(v).lower() != "nan"])
-                                hints = smart_truncate(hints, 300)
-                        except: pass
-                        
-                        ai_data = {}
-                        if base64_img:
-                             for attempt in range(3):
-                                try:
-                                    if "Dual-AI" in arch_mode:
-                                        ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
-                                        if err: raise Exception(err)
-                                        break
-                                except Exception as e:
-                                    if "429" in str(e): time.sleep(60)
-                                    time.sleep(2)
-                             image_knowledge_base[u_key] = ai_data
-                        
-                        with st.container():
-                            c_img, c_maker, c_checker = st.columns([1, 2, 2])
-                            with c_img:
-                                if img_display_data: st.image(img_display_data, width=150, caption=sku_label)
-                                else: st.error("Img Fail")
-                            with c_maker:
-                                st.caption("🤖 **Drafting (Gemini)**")
-                                if ai_data: st.json({k: ai_data[k] for k in list(ai_data)[:3]}, expanded=False)
-                                else: st.write("Processing...")
-                            with c_checker:
-                                st.caption("👨‍⚖️ **Audited (GPT-4o)**")
-                                if ai_data:
-                                    st.success("Approved")
-                                    with st.expander("View Final Data"): st.json(ai_data)
-                                else: st.error("Failed")
-                            st.divider()
-                    status_box.update(label="✅ Batch Processing Complete!", state="complete", expanded=False)
+                # --- PARALLEL EXECUTION ENGINE ---
+                with ThreadPoolExecutor(max_workers=concurrency_limit) as executor:
+                    # Submit all tasks
+                    future_to_sku = {
+                        executor.submit(
+                            process_row_workflow, 
+                            row, img_col, sku_col, config, client, arch_mode, active_kws, selected_mp
+                        ): row.get(sku_col, "Unknown") 
+                        for idx, row in valid_rows.iterrows()
+                    }
 
-                st.success("💾 Finalizing Excel File...")
-                final_rows = []
-                for idx, row in df_to_proc.iterrows():
-                    u_key = str(row.get(img_col, "")).strip()
-                    ai_data = image_knowledge_base.get(u_key, {})
-                    new_row = {}
-                    # STRICT OUTPUT ORDER: Uses config['headers'] directly
-                    for col in config['headers']:
-                        rule = mapping.get(col, {'source': 'BLANK'})
-                        val = ""
-                        if rule['source'] == 'INPUT': val = row.get(col, "")
-                        elif rule['source'] == 'FIXED': val = rule['value']
-                        elif rule['source'] == 'AI' and ai_data:
-                            if col in ai_data: val = ai_data[col]
-                            else: 
-                                clean_col = col.lower().replace(" ", "").replace("_", "")
-                                for k,v in ai_data.items():
-                                    if k.lower().replace(" ", "") in clean_col: val = v; break
-                            m_list = []
-                            for mc, opts in config['master_data'].items():
-                                if mc.lower() in col.lower(): m_list = opts; break
-                            if m_list and val: val = enforce_master_data_fallback(val, m_list)
-                        if isinstance(val, (list, tuple)): val = ", ".join(map(str, val))
-                        elif isinstance(val, dict): val = json.dumps(val)
-                        val = str(val).strip()
-                        if rule.get('max_len'): val = smart_truncate(val, int(float(rule['max_len'])))
-                        new_row[col] = val
-                    final_rows.append(new_row)
-                st.session_state.gen_results = final_rows
+                    # Process as they complete (Order: Random)
+                    for future in as_completed(future_to_sku):
+                        completed_count += 1
+                        prog_bar.progress(completed_count / total_count)
+                        
+                        try:
+                            res = future.result()
+                            final_output_rows.append(res['final_row'])
+                            
+                            # VISUAL CARD (Prints immediately as finished)
+                            with st.container():
+                                c_img, c_maker, c_checker = st.columns([1, 2, 2])
+                                with c_img:
+                                    if res['img_display']: st.image(res['img_display'], width=100, caption=res['sku'])
+                                    else: st.error("No Img")
+                                
+                                with c_maker:
+                                    st.caption(f"**{res['sku']}**")
+                                    if res['success']:
+                                        st.success("Generated")
+                                    else:
+                                        st.error(f"Failed: {res.get('error')}")
+
+                                with c_checker:
+                                    st.caption("**Audit Status**")
+                                    if res['success']:
+                                        with st.expander("Inspect"): st.json(res['ai_data'])
+                                    else: st.write("---")
+                                st.divider()
+                                
+                        except Exception as exc:
+                            st.error(f"Thread Error: {exc}")
+                
+                # SAVE RESULTS
+                st.session_state.gen_results = final_output_rows
+                st.success("✅ Batch Complete!")
                 st.rerun()
 
+            # RESULTS DISPLAY
             if "gen_results" in st.session_state and len(st.session_state.gen_results) > 0:
                 st.divider()
                 st.markdown("### 📊 Results")
@@ -560,86 +633,4 @@ else:
             if not default_mapping:
                 for h in headers:
                     src = "Leave Blank"; h_low = h.lower()
-                    if "image" in h_low or "sku" in h_low: src = "Input Excel"
-                    elif h in master_options or "name" in h_low or "desc" in h_low: src = "AI Generation"
-                    default_mapping.append({"Column Name": h, "Source": src, "Fixed Value": "", "Max Chars": "", "AI Style": "Standard (Auto)", "Custom Prompt": ""})
-            
-            ui_data = []
-            if mode == "Edit Existing" and loaded:
-                for col, rule in loaded['column_mapping'].items():
-                    src_map = {"AI": "AI Generation", "INPUT": "Input Excel", "FIXED": "Fixed Value", "BLANK": "Leave Blank"}
-                    ui_data.append({
-                        "Column Name": col, "Source": src_map.get(rule['source'], "Leave Blank"),
-                        "Fixed Value": rule.get('value', ''), "Max Chars": rule.get('max_len', ''),
-                        "AI Style": rule.get('prompt_style', 'Standard (Auto)'), "Custom Prompt": rule.get('custom_prompt', '')
-                    })
-            else: ui_data = default_mapping
-
-            edited_df = st.data_editor(pd.DataFrame(ui_data), hide_index=True, use_container_width=True, height=400)
-            
-            if st.button("💾 Save Configuration", type="primary"):
-                final_map = {}
-                for i, row in edited_df.iterrows():
-                    src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
-                    m_len = row['Max Chars']
-                    if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len).strip() == "0": m_len = ""
-                    else:
-                        try: m_len = int(float(m_len))
-                        except: m_len = ""
-                    final_map[row['Column Name']] = {"source": src_code, "value": row['Fixed Value'], "max_len": m_len, "prompt_style": row['AI Style'], "custom_prompt": row['Custom Prompt']}
-                if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
-                    st.success("✅ Saved!"); time.sleep(1); st.rerun()
-
-    # === TAB 3: UTILITIES ===
-    with tab_tools:
-        st.header("🛠️ Utilities")
-        tool_choice = st.radio("Select Tool", ["Lyra Prompt Optimizer", "Vision Guard", "Image Processor"], horizontal=True)
-        st.divider()
-
-        if tool_choice == "Lyra Prompt Optimizer":
-            st.subheader("Lyra Prompt Optimizer")
-            idea = st.text_area("Enter rough prompt idea:")
-            if st.button("✨ Optimize"): st.info(run_lyra_optimization("GPT", idea))
-            
-        elif tool_choice == "Vision Guard":
-            st.subheader("Vision Guard (Simulated)")
-            st.write("Upload images to check compliance before processing.")
-            st.file_uploader("Images", accept_multiple_files=True, key="vision_guard")
-            if st.button("Run Audit"): st.success("✅ All images passed compliance checks.")
-
-        elif tool_choice == "Image Processor":
-            st.subheader("🖼️ Image Processor")
-            proc_files = st.file_uploader("Upload Images", accept_multiple_files=True, type=["jpg", "png", "jpeg", "webp"])
-            
-            c_p1, c_p2, c_p3 = st.columns(3)
-            with c_p1: target_w = st.number_input("Target Width", min_value=100, value=1000)
-            with c_p2: target_h = st.number_input("Target Height", min_value=100, value=1300)
-            with c_p3: target_fmt = st.selectbox("Format", ["JPEG", "PNG", "WEBP"])
-            
-            if proc_files and st.button("Process Images"):
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w") as zf:
-                    for pf in proc_files:
-                        img = Image.open(pf)
-                        img = ImageOps.fit(img, (target_w, target_h), Image.LANCZOS)
-                        
-                        img_byte_arr = BytesIO()
-                        img.save(img_byte_arr, format=target_fmt)
-                        zf.writestr(f"processed_{pf.name.split('.')[0]}.{target_fmt.lower()}", img_byte_arr.getvalue())
-                
-                st.success("Processing Complete!")
-                st.download_button("⬇️ Download Processed Images (ZIP)", zip_buffer.getvalue(), file_name="processed_images.zip", mime="application/zip")
-
-    # === TAB 4: ADMIN ===
-    if st.session_state.user_role == "admin":
-        with tab_admin:
-            st.header("👥 User Management")
-            users = get_all_users()
-            st.dataframe(pd.DataFrame(users), use_container_width=True)
-            with st.expander("Add New User"):
-                with st.form("add_user"):
-                    new_u = st.text_input("Username"); new_p = st.text_input("Password"); new_r = st.selectbox("Role", ["user", "admin"])
-                    if st.form_submit_button("Create User"):
-                        ok, msg = create_user(new_u, new_p, new_r)
-                        if ok: st.success(msg); time.sleep(1); st.rerun()
-                        else: st.error(msg)
+                    if "image" in h_low or "sku" in h_low: sr
