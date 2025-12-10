@@ -29,44 +29,29 @@ st.set_page_config(page_title="HOB OS - Enterprise", layout="wide", page_icon="�
 def load_custom_css():
     st.markdown("""
         <style>
-        /* GLOBAL DARK THEME & FONT */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-        
-        html, body, [class*="css"] {
-            font-family: 'Inter', sans-serif;
-        }
-
-        /* HIDE STREAMLIT BRANDING */
+        html, body, [class*="css"] {font-family: 'Inter', sans-serif;}
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
-        
-        /* CONTAINER SPACING */
         .block-container {padding-top: 2rem; padding-bottom: 5rem;}
-
-        /* CARDS (Glassmorphism) */
         div[data-testid="stExpander"], div[data-testid="stMetric"] {
-            background: rgba(255, 255, 255, 0.05); /* Dark Transparent */
+            background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 12px;
             backdrop-filter: blur(10px);
             color: white;
             transition: transform 0.2s;
         }
-        
         div[data-testid="stMetric"]:hover {
             transform: translateY(-2px);
             border-color: rgba(255, 255, 255, 0.3);
         }
-
-        /* INPUT FIELDS */
         .stTextInput input, .stSelectbox, .stNumberInput input {
             background-color: #0E1117 !important;
             color: white !important;
             border-radius: 8px !important;
         }
-
-        /* PRIMARY BUTTON (Neon Blue) */
         button[kind="primary"] {
             background: linear-gradient(90deg, #2b5876 0%, #4e4376 100%);
             border: none;
@@ -76,32 +61,14 @@ def load_custom_css():
             border-radius: 8px;
             transition: all 0.3s ease;
         }
-        button[kind="primary"]:hover {
-            box-shadow: 0 0 15px rgba(78, 67, 118, 0.6);
-        }
-
-        /* PROGRESS BAR */
-        .stProgress > div > div > div > div {
-            background-image: linear-gradient(to right, #00c6ff, #0072ff);
-        }
-        
-        /* TABS */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 10px;
-        }
+        button[kind="primary"]:hover {box-shadow: 0 0 15px rgba(78, 67, 118, 0.6);}
+        .stProgress > div > div > div > div {background-image: linear-gradient(to right, #00c6ff, #0072ff);}
+        .stTabs [data-baseweb="tab-list"] {gap: 10px;}
         .stTabs [data-baseweb="tab"] {
-            height: 50px;
-            white-space: pre-wrap;
-            background-color: rgba(255,255,255,0.02);
-            border-radius: 8px;
-            padding: 0 20px;
-            color: #ccc;
+            height: 50px; white-space: pre-wrap; background-color: rgba(255,255,255,0.02);
+            border-radius: 8px; padding: 0 20px; color: #ccc;
         }
-        .stTabs [aria-selected="true"] {
-            background-color: rgba(255,255,255,0.1);
-            color: white;
-            font-weight: bold;
-        }
+        .stTabs [aria-selected="true"] {background-color: rgba(255,255,255,0.1); color: white; font-weight: bold;}
         </style>
     """, unsafe_allow_html=True)
 
@@ -309,8 +276,8 @@ def run_lyra_optimization(model_choice, raw_instruction):
             return response.text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- DUAL AI LOGIC ---
-def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
+# --- UNIFIED AI LOGIC (HANDLES ALL MODES) ---
+def analyze_image_unified(client, base64_image, user_hints, keywords, config, marketplace, mode="Dual-AI"):
     target_columns = []
     strict_constraints = {} 
     creative_columns = []   
@@ -332,43 +299,70 @@ def analyze_image_maker_checker(client, base64_image, user_hints, keywords, conf
             else: creative_columns.append(col)
     
     maker_draft = {}
-    try:
-        if not GEMINI_AVAILABLE: return None, "Gemini Missing"
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        img_data = base64.b64decode(base64_image)
-        image_part = {"mime_type": "image/jpeg", "data": img_data}
-        maker_prompt = f"""
-        Role: E-commerce Expert for {marketplace}.
-        Task: Analyze image and generate JSON.
-        SECTION A: ALLOWED OPTIONS: {json.dumps(strict_constraints)}
-        SECTION B: CREATIVE: {creative_columns} - Keywords: {keywords}
-        Hints: {user_hints}
-        Output: JSON Only.
-        """
-        response = model.generate_content([maker_prompt, image_part], generation_config=genai.types.GenerationConfig(temperature=0.4))
-        text_out = response.text
-        if "```json" in text_out: text_out = text_out.split("```json")[1].split("```")[0]
-        elif "```" in text_out: text_out = text_out.split("```")[1].split("```")[0]
-        maker_draft = json.loads(text_out)
-    except Exception as e: return None, f"Maker Failed: {str(e)}"
+    
+    # 1. GEMINI PATH (Maker / Solo)
+    if "Gemini" in mode or "Dual" in mode:
+        try:
+            if not GEMINI_AVAILABLE: return None, "Gemini Missing"
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            img_data = base64.b64decode(base64_image)
+            image_part = {"mime_type": "image/jpeg", "data": img_data}
+            
+            maker_prompt = f"""
+            Role: E-commerce Expert for {marketplace}.
+            Task: Analyze image and generate JSON.
+            SECTION A: ALLOWED OPTIONS: {json.dumps(strict_constraints)}
+            SECTION B: CREATIVE: {creative_columns} - Keywords: {keywords}
+            Hints: {user_hints}
+            Output: JSON Only.
+            """
+            response = model.generate_content([maker_prompt, image_part], generation_config=genai.types.GenerationConfig(temperature=0.4))
+            text_out = response.text
+            if "```json" in text_out: text_out = text_out.split("```json")[1].split("```")[0]
+            elif "```" in text_out: text_out = text_out.split("```")[1].split("```")[0]
+            maker_draft = json.loads(text_out)
+            
+            if "Gemini" in mode: return maker_draft, None # Return early if Gemini Only
 
-    try:
-        checker_prompt = f"""
-        You are the LEAD DATA AUDITOR.
-        INPUTS: 1. Visual 2. Draft: {json.dumps(maker_draft)} 3. Options: {json.dumps(strict_constraints)}
-        MISSION: Enforce consistency. If Draft conflicts with Image or Options, OVERWRITE it.
-        OUTPUT: Final JSON for columns: {", ".join(target_columns)}
-        """
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a Data Consistency Engine. Temperature=0.0."},
-                {"role": "user", "content": [{"type": "text", "text": checker_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
-            ],
-            response_format={"type": "json_object"}, temperature=0.0
-        )
-        return json.loads(response.choices[0].message.content), None
-    except Exception as e: return None, f"Checker Failed: {str(e)}"
+        except Exception as e:
+            if "Gemini" in mode: return None, f"Gemini Failed: {str(e)}"
+            # If Dual mode, we proceed to Checker but with empty draft or error? 
+            # Ideally Dual requires Maker, so we fail here.
+            return None, f"Maker (Gemini) Failed: {str(e)}"
+
+    # 2. GPT-4o PATH (Checker / Solo)
+    if "GPT" in mode or "Dual" in mode:
+        try:
+            # If Solo GPT, prompt is different (Generative). If Dual, prompt is Auditing.
+            if "GPT" in mode:
+                gpt_prompt = f"""
+                Role: E-commerce Expert.
+                Task: Analyze image and generate JSON.
+                ALLOWED OPTIONS: {json.dumps(strict_constraints)}
+                CREATIVE COLS: {creative_columns}
+                Hints: {user_hints}
+                Output: JSON Only.
+                """
+            else: # Dual
+                gpt_prompt = f"""
+                You are the LEAD DATA AUDITOR.
+                INPUTS: 1. Visual 2. Draft: {json.dumps(maker_draft)} 3. Options: {json.dumps(strict_constraints)}
+                MISSION: Enforce consistency. If Draft conflicts with Image or Options, OVERWRITE it.
+                OUTPUT: Final JSON for columns: {", ".join(target_columns)}
+                """
+
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a Data Engine. Temperature=0.0."},
+                    {"role": "user", "content": [{"type": "text", "text": gpt_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}
+                ],
+                response_format={"type": "json_object"}, temperature=0.0
+            )
+            return json.loads(response.choices[0].message.content), None
+        except Exception as e: return None, f"GPT Failed: {str(e)}"
+    
+    return None, "Invalid Mode"
 
 # ==========================================
 # 3. WORKER FUNCTION (BACKEND PROCESSING)
@@ -414,21 +408,23 @@ def process_row_workflow(row_data, img_col, sku_col, config, client, arch_mode, 
     ai_data = {}
     err = None
     
-    if "Dual-AI" in arch_mode:
-        for attempt in range(3):
-            try:
-                ai_data, err = analyze_image_maker_checker(client, base64_img, hints, active_kws, config, selected_mp)
-                if err: 
-                    if "429" in str(err): 
-                        time.sleep(60) 
-                        continue
-                    else: raise Exception(err)
-                break
-            except Exception as e:
-                err = str(e)
-                time.sleep(2)
-    else:
-        err = "Only Dual-AI supported."
+    # DETERMINE MODE
+    mode_arg = "Dual-AI"
+    if "Gemini" in arch_mode: mode_arg = "Gemini"
+    elif "GPT" in arch_mode: mode_arg = "GPT"
+
+    for attempt in range(3):
+        try:
+            ai_data, err = analyze_image_unified(client, base64_img, hints, active_kws, config, selected_mp, mode=mode_arg)
+            if err: 
+                if "429" in str(err): 
+                    time.sleep(60) 
+                    continue
+                else: raise Exception(err)
+            break
+        except Exception as e:
+            err = str(e)
+            time.sleep(2)
 
     if err:
         result_package["error"] = err
@@ -533,7 +529,10 @@ else:
             st.markdown("#### ⚙️ Execution")
             c_set1, c_set2, c_set3, c_set4 = st.columns(4)
             with c_set1: run_mode = st.selectbox("Scope", ["🧪 Test (3 Rows)", "🚀 Full Batch"])
-            with c_set2: arch_mode = st.selectbox("Engine", ["✨ Dual-AI"])
+            
+            # --- RESTORED MULTI-ENGINE SELECTION ---
+            with c_set2: arch_mode = st.selectbox("Engine", ["✨ Dual-AI (Best)", "⚡ Gemini Only (Fast)", "🧠 GPT-4o Only (Precise)"])
+            
             with c_set3:
                 all_cols = df_input.columns.tolist()
                 img_candidates = [c for c in all_cols if "url" in c.lower() or "image" in c.lower()]
@@ -556,14 +555,13 @@ else:
                 st.session_state.gen_results = []
                 st.markdown("### 📡 Processing Feed")
                 prog_bar = st.progress(0)
-                status_placeholder = st.empty() # Placeholder for "Processing SKU..." text
-                results_container = st.container() # Container for the cards
+                status_placeholder = st.empty() 
+                results_container = st.container()
 
                 completed_count = 0
                 total_count = len(valid_rows)
                 final_output_rows = []
 
-                # --- FIXED PARALLEL ENGINE ---
                 with ThreadPoolExecutor(max_workers=concurrency_limit) as executor:
                     future_to_sku = {
                         executor.submit(
@@ -580,8 +578,6 @@ else:
                         try:
                             res = future.result()
                             final_output_rows.append(res['final_row'])
-                            
-                            # LIVE UI UPDATE (Force Refresh)
                             status_placeholder.markdown(f"**Processing ({completed_count}/{total_count}):** `{res['sku']}`")
                             
                             with results_container:
@@ -595,11 +591,9 @@ else:
                                         if res['success']: st.success("Generated")
                                         else: st.error(f"Err: {res.get('error')}")
                                     with c_checker:
-                                        st.caption("Audit")
-                                        if res['success']: st.info("Passed")
+                                        st.caption("Mode")
+                                        st.info(arch_mode.split()[1]) # Show "Dual-AI", "Gemini", "GPT"
                                     st.divider()
-                            
-                            # Small sleep to allow Streamlit UI to catch up
                             time.sleep(0.05) 
                                 
                         except Exception as exc:
@@ -683,7 +677,7 @@ else:
                 if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
-    # === TAB 3: UTILITIES (WITH BG REMOVER) ===
+    # === TAB 3: UTILITIES ===
     with tab_tools:
         st.header("🛠️ Utilities")
         tool_choice = st.radio("Tool", ["Lyra Prompt", "Vision Guard", "Image Processor"], horizontal=True)
@@ -708,7 +702,6 @@ else:
             with c_p2: target_h = st.number_input("Height", min_value=100, value=1300)
             with c_p3: target_fmt = st.selectbox("Format", ["JPEG", "PNG", "WEBP"])
             with c_p4: 
-                # RESTORED FEATURE
                 remove_bg = st.checkbox("Remove Background (White)", value=False)
             
             if proc_files and st.button("Process Images"):
@@ -716,17 +709,13 @@ else:
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
                     for pf in proc_files:
                         img = Image.open(pf)
-                        
-                        # BG REMOVAL LOGIC
                         if remove_bg and REMBG_AVAILABLE:
                             img = remove_bg_ai(img)
-                            # Composite on White
                             background = Image.new("RGB", img.size, (255, 255, 255))
                             background.paste(img, mask=img.split()[3] if len(img.split()) == 4 else None)
                             img = background
                         elif remove_bg and not REMBG_AVAILABLE:
                             st.warning("Rembg library not installed. Skipping BG removal.")
-
                         img = ImageOps.fit(img, (target_w, target_h), Image.LANCZOS)
                         img_byte_arr = BytesIO()
                         img.save(img_byte_arr, format=target_fmt)
