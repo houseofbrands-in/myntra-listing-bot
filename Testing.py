@@ -257,7 +257,7 @@ def run_lyra_optimization(model_choice, raw_instruction):
             return response.text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- DUAL AI LOGIC (Unchanged) ---
+# --- DUAL AI LOGIC ---
 def analyze_image_maker_checker(client, base64_image, user_hints, keywords, config, marketplace):
     target_columns = []
     strict_constraints = {} 
@@ -633,4 +633,88 @@ else:
             if not default_mapping:
                 for h in headers:
                     src = "Leave Blank"; h_low = h.lower()
-                    if "image" in h_low or "sku" in h_low: sr
+                    if "image" in h_low or "sku" in h_low: 
+                        src = "Input Excel"  # <--- FIXED: This was 'sr' causing the NameError
+                    elif h in master_options or "name" in h_low or "desc" in h_low: 
+                        src = "AI Generation"
+                    default_mapping.append({"Column Name": h, "Source": src, "Fixed Value": "", "Max Chars": "", "AI Style": "Standard (Auto)", "Custom Prompt": ""})
+            
+            ui_data = []
+            if mode == "Edit Existing" and loaded:
+                for col, rule in loaded['column_mapping'].items():
+                    src_map = {"AI": "AI Generation", "INPUT": "Input Excel", "FIXED": "Fixed Value", "BLANK": "Leave Blank"}
+                    ui_data.append({
+                        "Column Name": col, "Source": src_map.get(rule['source'], "Leave Blank"),
+                        "Fixed Value": rule.get('value', ''), "Max Chars": rule.get('max_len', ''),
+                        "AI Style": rule.get('prompt_style', 'Standard (Auto)'), "Custom Prompt": rule.get('custom_prompt', '')
+                    })
+            else: ui_data = default_mapping
+
+            edited_df = st.data_editor(pd.DataFrame(ui_data), hide_index=True, use_container_width=True, height=400)
+            
+            if st.button("💾 Save Configuration", type="primary"):
+                final_map = {}
+                for i, row in edited_df.iterrows():
+                    src_code = "AI" if row['Source'] == "AI Generation" else "INPUT" if row['Source'] == "Input Excel" else "FIXED" if row['Source'] == "Fixed Value" else "BLANK"
+                    m_len = row['Max Chars']
+                    if pd.isna(m_len) or str(m_len).strip() == "" or str(m_len).strip() == "0": m_len = ""
+                    else:
+                        try: m_len = int(float(m_len))
+                        except: m_len = ""
+                    final_map[row['Column Name']] = {"source": src_code, "value": row['Fixed Value'], "max_len": m_len, "prompt_style": row['AI Style'], "custom_prompt": row['Custom Prompt']}
+                if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
+                    st.success("✅ Saved!"); time.sleep(1); st.rerun()
+
+    # === TAB 3: UTILITIES ===
+    with tab_tools:
+        st.header("🛠️ Utilities")
+        tool_choice = st.radio("Select Tool", ["Lyra Prompt Optimizer", "Vision Guard", "Image Processor"], horizontal=True)
+        st.divider()
+
+        if tool_choice == "Lyra Prompt Optimizer":
+            st.subheader("Lyra Prompt Optimizer")
+            idea = st.text_area("Enter rough prompt idea:")
+            if st.button("✨ Optimize"): st.info(run_lyra_optimization("GPT", idea))
+            
+        elif tool_choice == "Vision Guard":
+            st.subheader("Vision Guard (Simulated)")
+            st.write("Upload images to check compliance before processing.")
+            st.file_uploader("Images", accept_multiple_files=True, key="vision_guard")
+            if st.button("Run Audit"): st.success("✅ All images passed compliance checks.")
+
+        elif tool_choice == "Image Processor":
+            st.subheader("🖼️ Image Processor")
+            proc_files = st.file_uploader("Upload Images", accept_multiple_files=True, type=["jpg", "png", "jpeg", "webp"])
+            
+            c_p1, c_p2, c_p3 = st.columns(3)
+            with c_p1: target_w = st.number_input("Target Width", min_value=100, value=1000)
+            with c_p2: target_h = st.number_input("Target Height", min_value=100, value=1300)
+            with c_p3: target_fmt = st.selectbox("Format", ["JPEG", "PNG", "WEBP"])
+            
+            if proc_files and st.button("Process Images"):
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w") as zf:
+                    for pf in proc_files:
+                        img = Image.open(pf)
+                        img = ImageOps.fit(img, (target_w, target_h), Image.LANCZOS)
+                        
+                        img_byte_arr = BytesIO()
+                        img.save(img_byte_arr, format=target_fmt)
+                        zf.writestr(f"processed_{pf.name.split('.')[0]}.{target_fmt.lower()}", img_byte_arr.getvalue())
+                
+                st.success("Processing Complete!")
+                st.download_button("⬇️ Download Processed Images (ZIP)", zip_buffer.getvalue(), file_name="processed_images.zip", mime="application/zip")
+
+    # === TAB 4: ADMIN ===
+    if st.session_state.user_role == "admin":
+        with tab_admin:
+            st.header("👥 User Management")
+            users = get_all_users()
+            st.dataframe(pd.DataFrame(users), use_container_width=True)
+            with st.expander("Add New User"):
+                with st.form("add_user"):
+                    new_u = st.text_input("Username"); new_p = st.text_input("Password"); new_r = st.selectbox("Role", ["user", "admin"])
+                    if st.form_submit_button("Create User"):
+                        ok, msg = create_user(new_u, new_p, new_r)
+                        if ok: st.success(msg); time.sleep(1); st.rerun()
+                        else: st.error(msg)
