@@ -367,15 +367,17 @@ else:
             with c_conf2:
                 input_file = st.file_uploader("Upload Input Excel (.xlsx)", type=["xlsx"], label_visibility="collapsed")
                 
-                # FIX 1: DOWNLOAD INPUT TEMPLATE (Not Myntra Headers)
+                # FIX 1: DOWNLOAD INPUT TEMPLATE (STRICT ORDER)
                 if config:
-                    # Calculate required INPUT columns based on mapping
-                    req_input_cols = ["Image URL", "SKU"] # Default essentials
-                    for col, rule in config.get('column_mapping', {}).items():
-                        if rule.get('source') == 'INPUT':
-                            req_input_cols.append(col)
+                    req_input_cols = ["Image URL", "SKU"]
                     
-                    req_input_cols = list(set(req_input_cols)) # Remove duplicates
+                    # Iterate through the ORDERED headers list from config
+                    for h in config.get('headers', []):
+                        rule = config.get('column_mapping', {}).get(h, {})
+                        if rule.get('source') == 'INPUT':
+                            # Avoid duplicates only if they match the first two
+                            if h not in req_input_cols:
+                                req_input_cols.append(h)
                     
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer: 
@@ -385,7 +387,7 @@ else:
                         "📥 Download Input Template (For Upload)", 
                         output.getvalue(), 
                         file_name=f"Input_Template_{run_cat}.xlsx",
-                        help="This is the file you should fill with Images/SKUs and upload here."
+                        help="Contains Image URL, SKU, and columns marked as 'Input Excel'."
                     )
 
         if input_file and config:
@@ -489,6 +491,7 @@ else:
                     u_key = str(row.get(img_col, "")).strip()
                     ai_data = image_knowledge_base.get(u_key, {})
                     new_row = {}
+                    # STRICT OUTPUT ORDER: Uses config['headers'] directly
                     for col in config['headers']:
                         rule = mapping.get(col, {'source': 'BLANK'})
                         val = ""
@@ -587,7 +590,7 @@ else:
                 if save_config(selected_mp, cat_name, {"category_name": cat_name, "headers": headers, "master_data": master_options, "column_mapping": final_map}):
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
-    # === TAB 3: UTILITIES (RESTORED & IMPROVED) ===
+    # === TAB 3: UTILITIES ===
     with tab_tools:
         st.header("🛠️ Utilities")
         tool_choice = st.radio("Select Tool", ["Lyra Prompt Optimizer", "Vision Guard", "Image Processor"], horizontal=True)
@@ -604,7 +607,6 @@ else:
             st.file_uploader("Images", accept_multiple_files=True, key="vision_guard")
             if st.button("Run Audit"): st.success("✅ All images passed compliance checks.")
 
-        # FIX 2: IMAGE PROCESSOR RESTORED
         elif tool_choice == "Image Processor":
             st.subheader("🖼️ Image Processor")
             proc_files = st.file_uploader("Upload Images", accept_multiple_files=True, type=["jpg", "png", "jpeg", "webp"])
