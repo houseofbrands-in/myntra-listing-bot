@@ -575,7 +575,52 @@ else:
                     })
             else: ui_data = default_mapping
 
-            edited_df = st.data_editor(pd.DataFrame(ui_data), hide_index=True, use_container_width=True, height=400)
+            # --- DEFINE DROPDOWN OPTIONS ---
+                source_options = ["AI Generation", "Input Excel", "Fixed Value", "Leave Blank"]
+                style_options = ["Standard (Auto)", "Creative (Marketing)", "Technical (Specs)", "SEO (Optimized)"] 
+
+                # --- RENDER EDITOR WITH ALL CONTROLS ---
+                edited_df = st.data_editor(
+                    pd.DataFrame(ui_data),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "Column Name": st.column_config.TextColumn(
+                            "Column Name", 
+                            disabled=True, 
+                            width="medium"
+                        ),
+                        "Source": st.column_config.SelectboxColumn(
+                            "Source",
+                            width="medium",
+                            options=source_options,
+                            required=True
+                        ),
+                        "Fixed Value": st.column_config.TextColumn(
+                            "Fixed Value",
+                            width="medium"
+                        ),
+                        "Max Chars": st.column_config.NumberColumn(
+                            "Max Chars",
+                            help="Limit output length",
+                            min_value=0,
+                            max_value=2000,
+                            step=1,
+                            width="small"
+                        ),
+                        "AI Style": st.column_config.SelectboxColumn(
+                            "AI Style",
+                            width="medium",
+                            options=style_options,
+                            required=True
+                        ),
+                        "Custom Prompt": st.column_config.TextColumn(
+                            "Custom Prompt",
+                            width="large"
+                        )
+                    }
+                )
             
             if st.button("💾 Save Configuration", type="primary"):
                 final_map = {}
@@ -643,3 +688,4 @@ else:
                         ok, msg = create_user(new_u, new_p, new_r)
                         if ok: st.success(msg); time.sleep(1); st.rerun()
                         else: st.error(msg)
+
