@@ -66,6 +66,7 @@ if "logged_in" not in st.session_state:
 def init_connection():
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        # Ensure your secrets.toml has [gcp_service_account]
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
@@ -86,8 +87,12 @@ def get_worksheet_data(sheet_name, worksheet_name):
 SHEET_NAME = "Testing_Agency_OS_Database"
 
 try:
-    api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(api_key=api_key)
+    if "OPENAI_API_KEY" in st.secrets:
+        api_key = st.secrets["OPENAI_API_KEY"]
+        client = OpenAI(api_key=api_key)
+    else:
+        client = None
+        
     try:
         if "GEMINI_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -575,52 +580,24 @@ else:
                     })
             else: ui_data = default_mapping
 
-            # --- DEFINE DROPDOWN OPTIONS ---
-                source_options = ["AI Generation", "Input Excel", "Fixed Value", "Leave Blank"]
-                style_options = ["Standard (Auto)", "Creative (Marketing)", "Technical (Specs)", "SEO (Optimized)"] 
-
-                # --- RENDER EDITOR WITH ALL CONTROLS ---
-                edited_df = st.data_editor(
-                    pd.DataFrame(ui_data),
-                    hide_index=True,
-                    use_container_width=True,
-                    height=400,
-                    column_config={
-                        "Column Name": st.column_config.TextColumn(
-                            "Column Name", 
-                            disabled=True, 
-                            width="medium"
-                        ),
-                        "Source": st.column_config.SelectboxColumn(
-                            "Source",
-                            width="medium",
-                            options=source_options,
-                            required=True
-                        ),
-                        "Fixed Value": st.column_config.TextColumn(
-                            "Fixed Value",
-                            width="medium"
-                        ),
-                        "Max Chars": st.column_config.NumberColumn(
-                            "Max Chars",
-                            help="Limit output length",
-                            min_value=0,
-                            max_value=2000,
-                            step=1,
-                            width="small"
-                        ),
-                        "AI Style": st.column_config.SelectboxColumn(
-                            "AI Style",
-                            width="medium",
-                            options=style_options,
-                            required=True
-                        ),
-                        "Custom Prompt": st.column_config.TextColumn(
-                            "Custom Prompt",
-                            width="large"
-                        )
-                    }
-                )
+            # --- DEFINE DROPDOWN OPTIONS & RENDER EDITOR ---
+            source_options = ["AI Generation", "Input Excel", "Fixed Value", "Leave Blank"]
+            style_options = ["Standard (Auto)", "Creative (Marketing)", "Technical (Specs)", "SEO (Optimized)"]
+            
+            edited_df = st.data_editor(
+                pd.DataFrame(ui_data),
+                hide_index=True,
+                use_container_width=True,
+                height=400,
+                column_config={
+                    "Column Name": st.column_config.TextColumn("Column Name", disabled=True, width="medium"),
+                    "Source": st.column_config.SelectboxColumn("Source", width="medium", options=source_options, required=True),
+                    "Fixed Value": st.column_config.TextColumn("Fixed Value", width="medium"),
+                    "Max Chars": st.column_config.NumberColumn("Max Chars", help="Limit output length", min_value=0, max_value=2000, step=1, width="small"),
+                    "AI Style": st.column_config.SelectboxColumn("AI Style", width="medium", options=style_options, required=True),
+                    "Custom Prompt": st.column_config.TextColumn("Custom Prompt", width="large")
+                }
+            )
             
             if st.button("💾 Save Configuration", type="primary"):
                 final_map = {}
@@ -688,4 +665,3 @@ else:
                         ok, msg = create_user(new_u, new_p, new_r)
                         if ok: st.success(msg); time.sleep(1); st.rerun()
                         else: st.error(msg)
-
