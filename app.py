@@ -84,7 +84,7 @@ def get_worksheet_data(sheet_name, worksheet_name):
         return ws.get_all_values()
     except: return []
 
-SHEET_NAME = "Testing_Agency_OS_Database"
+SHEET_NAME = "Agency_OS_Database"
 
 try:
     if "OPENAI_API_KEY" in st.secrets:
@@ -665,3 +665,4 @@ else:
                         ok, msg = create_user(new_u, new_p, new_r)
                         if ok: st.success(msg); time.sleep(1); st.rerun()
                         else: st.error(msg)
+
